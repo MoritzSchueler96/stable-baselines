@@ -29,6 +29,13 @@ def nature_cnn(scaled_images, **kwargs):
     return activ(linear(layer_3, 'fc1', n_hidden=512, init_scale=np.sqrt(2)))
 
 
+def cnn_mlp_extractor(obs, net_arch, act_fun, **kwargs):
+    h, w = tf.shape(obs)
+    obs = tf.expand_dims(obs, -1)
+    conv_layer = act_fun(conv(obs, "c1", n_filters=3, filter_size=(h, 1), stride=1, init_scale=np.sqrt(2), **kwargs))
+    return mlp_extractor(conv_to_fc(conv_layer), net_arch, act_fun)
+
+
 def mlp_extractor(flat_observations, net_arch, act_fun):
     """
     Constructs an MLP that receives observations as an input and outputs a latent representation for the policy and
@@ -561,6 +568,8 @@ class FeedForwardPolicy(ActorCriticPolicy):
         with tf.variable_scope("model", reuse=reuse):
             if feature_extraction == "cnn":
                 pi_latent = vf_latent = cnn_extractor(self.processed_obs, **kwargs)
+            elif feature_extraction == "cnn_mlp":
+                pi_latent, vf_latent = cnn_mlp_extractor(self.processed_obs, net_arch, act_fun, **kwargs)
             else:
                 pi_latent, vf_latent = mlp_extractor(tf.layers.flatten(self.processed_obs), net_arch, act_fun)
 
@@ -705,6 +714,12 @@ class MlpLnLstmPolicy(LstmPolicy):
                                               layer_norm=True, feature_extraction="mlp", **_kwargs)
 
 
+class CnnMlpPolicy(FeedForwardPolicy):
+    def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=False, **_kwargs):
+        super(CnnMlpPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse,
+                                        feature_extraction="cnn_mlp", **_kwargs)
+
+
 _policy_registry = {
     ActorCriticPolicy: {
         "CnnPolicy": CnnPolicy,
@@ -713,6 +728,7 @@ _policy_registry = {
         "MlpPolicy": MlpPolicy,
         "MlpLstmPolicy": MlpLstmPolicy,
         "MlpLnLstmPolicy": MlpLnLstmPolicy,
+        "CnnMlpPolicy": CnnMlpPolicy
     }
 }
 
