@@ -8,7 +8,8 @@ from gym.spaces import Discrete
 
 from stable_baselines.a2c.utils import conv, linear, conv_to_fc, batch_to_seq, seq_to_batch, lstm
 from stable_baselines.common.distributions import make_proba_dist_type, CategoricalProbabilityDistribution, \
-    MultiCategoricalProbabilityDistribution, DiagGaussianProbabilityDistribution, BernoulliProbabilityDistribution
+    MultiCategoricalProbabilityDistribution, DiagGaussianProbabilityDistribution, BernoulliProbabilityDistribution, \
+    BetaProbabilityDistribution
 from stable_baselines.common.input import observation_input
 
 
@@ -178,10 +179,10 @@ class ActorCriticPolicy(BasePolicy):
     :param scale: (bool) whether or not to scale the input
     """
 
-    def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=False, scale=False):
+    def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=False, scale=False, box_dist_type="gaussian"):
         super(ActorCriticPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=reuse,
                                                 scale=scale)
-        self.pdtype = make_proba_dist_type(ac_space)
+        self.pdtype = make_proba_dist_type(ac_space, box_dist_type)
         self.is_discrete = isinstance(ac_space, Discrete)
         self.policy = None
         self.proba_distribution = None
@@ -202,6 +203,8 @@ class ActorCriticPolicy(BasePolicy):
                 self.policy_proba = tf.nn.softmax(self.policy)
             elif isinstance(self.proba_distribution, DiagGaussianProbabilityDistribution):
                 self.policy_proba = [self.proba_distribution.mean, self.proba_distribution.std]
+            elif isinstance(self.proba_distribution, BetaProbabilityDistribution):
+                self.policy_proba = [self.proba_distribution.alpha, self.proba_distribution.beta]
             elif isinstance(self.proba_distribution, BernoulliProbabilityDistribution):
                 self.policy_proba = tf.nn.sigmoid(self.policy)
             elif isinstance(self.proba_distribution, MultiCategoricalProbabilityDistribution):
@@ -412,8 +415,9 @@ class FeedForwardPolicy(ActorCriticPolicy):
 
     def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=False, layers=None, net_arch=None,
                  act_fun=tf.tanh, cnn_extractor=nature_cnn, feature_extraction="cnn", **kwargs):
+        box_dist_type = kwargs.pop("box_dist_type", "guassian")
         super(FeedForwardPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=reuse,
-                                                scale=(feature_extraction == "cnn"))
+                                                scale=(feature_extraction == "cnn"), box_dist_type=box_dist_type)
 
         self._kwargs_check(feature_extraction, kwargs)
 
