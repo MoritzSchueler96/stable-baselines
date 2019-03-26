@@ -108,6 +108,12 @@ def conv(input_tensor, scope, *, n_filters, filter_size, stride,
     :param one_dim_bias: (bool) If the bias should be one dimentional or not
     :return: (TensorFlow Tensor) 2d convolutional layer
     """
+    if isinstance(filter_size, tuple):
+        filter_size_h = filter_size[0]
+        filter_size_w = filter_size[1]
+    else:
+        filter_size_h = filter_size
+        filter_size_w = filter_size
     if data_format == 'NHWC':
         channel_ax = 3
         strides = [1, stride, stride, 1]
@@ -120,7 +126,7 @@ def conv(input_tensor, scope, *, n_filters, filter_size, stride,
         raise NotImplementedError
     bias_var_shape = [n_filters] if one_dim_bias else [1, n_filters, 1, 1]
     n_input = input_tensor.get_shape()[channel_ax].value
-    wshape = [filter_size, filter_size, n_input, n_filters]
+    wshape = [filter_size_h, filter_size_w, n_input, n_filters]
     with tf.variable_scope(scope):
         weight = tf.get_variable("w", wshape, initializer=ortho_init(init_scale))
         bias = tf.get_variable("b", bias_var_shape, initializer=tf.constant_initializer(0.0))
