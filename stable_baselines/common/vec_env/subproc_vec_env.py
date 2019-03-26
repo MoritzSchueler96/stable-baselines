@@ -112,6 +112,9 @@ class SubprocVecEnv(VecEnv):
         self.closed = True
 
     def render(self, mode='human', *args, **kwargs):
+        self.remotes[0].send(('render', (args, {**kwargs})))
+        self.remotes[0].recv()
+        return
         for pipe in self.remotes:
             # gather images from subprocesses
             # `mode` will be taken into account later
