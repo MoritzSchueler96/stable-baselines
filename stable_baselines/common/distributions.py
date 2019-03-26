@@ -507,6 +507,50 @@ class BetaProbabilityDistribution(ProbabilityDistribution):
         return cls(flat)
 
 
+class BetaProbabilityDistribution(ProbabilityDistribution):
+    def __init__(self, flat):
+        """
+        Probability distributions from beta input
+        :param flat: ([float]) the beta input data
+        """
+        self.flat = flat
+        print(flat)
+        # as per http://proceedings.mlr.press/v70/chou17a/chou17a.pdf
+        self.alpha = 1.0 + tf.layers.dense(flat, flat.shape[1], activation=tf.nn.softplus)
+        self.beta  = 1.0 + tf.layers.dense(flat, flat.shape[1], activation=tf.nn.softplus)
+        self.dist = tf.distributions.Beta(concentration1=self.alpha, concentration0=self.beta, validate_args=True,
+            allow_nan_stats=False)
+
+    def flatparam(self):
+        return self.flat
+
+    def mode(self):
+        #return tf.stack([p.mode() for p in self.flat])
+        return self.dist.mode()
+
+    def neglogp(self, x):
+        return tf.reduce_sum(-self.dist.log_prob(x), axis=-1)
+
+    def kl(self, other):
+        assert isinstance(other, BetaProbabilityDistribution)
+        return self.dist.kl_divergence(other.dist)
+
+    def entropy(self):
+        return self.dist.entropy()
+
+    def sample(self):
+        return self.dist.sample()
+
+    @classmethod
+    def fromflat(cls, flat):
+        """
+        Create an instance of this from new beta input
+        :param flat: ([float]) the beta input data
+        :return: (ProbabilityDistribution) the instance from the given beta input data
+        """
+        return cls(flat)
+
+
 class BernoulliProbabilityDistribution(ProbabilityDistribution):
     def __init__(self, logits):
         """
