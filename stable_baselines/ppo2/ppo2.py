@@ -369,7 +369,8 @@ class PPO2(ActorCriticRLModel):
             "action_space": self.action_space,
             "n_envs": self.n_envs,
             "_vectorize_action": self._vectorize_action,
-            "policy_kwargs": self.policy_kwargs
+            "policy_kwargs": self.policy_kwargs,
+            "num_timesteps": self.num_timesteps
         }
 
         params = self.sess.run(self.params)
@@ -410,6 +411,7 @@ class Runner(AbstractEnvRunner):
         mb_obs, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs = [], [], [], [], [], []
         mb_states = self.states
         ep_infos = []
+
         for _ in range(self.n_steps):
             actions, values, self.states, neglogpacs = self.model.step(self.obs, self.states, self.dones)
             mb_obs.append(self.obs.copy())
