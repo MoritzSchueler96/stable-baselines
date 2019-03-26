@@ -1154,7 +1154,7 @@ class TensorboardWriter:
         for path in glob.glob("{}/{}_[0-9]*".format(self.tensorboard_log_path, self.tb_log_name)):
             file_name = path.split(os.sep)[-1]
             ext = file_name.split("_")[-1]
-            if self.tb_log_name == "_".join(file_name.split("_")[:-1]) and ext.isdigit() and int(ext) > max_run_id:
+            if self.tb_log_name == "_".join(os.path.basename(file_name).split("_")[:-1]) and ext.isdigit() and int(ext) > max_run_id:
                 max_run_id = int(ext)
         return max_run_id
 
