@@ -31,9 +31,8 @@ def nature_cnn(scaled_images, **kwargs):
 
 
 def cnn_mlp_extractor(obs, net_arch, act_fun, **kwargs):
-    h, w = tf.shape(obs)
     obs = tf.expand_dims(obs, -1)
-    conv_layer = act_fun(conv(obs, "c1", n_filters=3, filter_size=(h, 1), stride=1, init_scale=np.sqrt(2), **kwargs))
+    conv_layer = act_fun(conv(obs, "c1", n_filters=3, filter_size=(obs.shape[1], 1), stride=1, init_scale=np.sqrt(2), **kwargs))
     return mlp_extractor(conv_to_fc(conv_layer), net_arch, act_fun)
 
 
