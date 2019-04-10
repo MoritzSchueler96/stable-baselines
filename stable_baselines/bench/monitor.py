@@ -148,6 +148,10 @@ class Monitor(gym.Wrapper):
         """
         return self.episode_times
 
+    def set_schedule_level(self, level):
+        return self.env.set_schedule_level(level)
+
+
 
 class LoadMonitorResultsError(Exception):
     """
