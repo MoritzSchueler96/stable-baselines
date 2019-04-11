@@ -62,6 +62,9 @@ https://medium.com/@araffin/df87c4b2fc82
 Documentation:
 https://stable-baselines.readthedocs.io/en/master/
 
+RL Baselines Zoo:
+https://github.com/araffin/rl-baselines-zoo
+
 ## Quick example
 
 Most of the library tries to follow a sklearn-like syntax for the Reinforcement Learning algorithms using Gym.
@@ -108,7 +111,6 @@ setup(name='stable_baselines',
           'joblib',
           'zmq',
           'dill',
-          'progressbar2',
           'mpi4py',
           'cloudpickle>=0.5.5',
           'click',
@@ -139,7 +141,7 @@ setup(name='stable_baselines',
       license="MIT",
       long_description=long_description,
       long_description_content_type='text/markdown',
-      version="2.4.1",
+      version="2.5.1a0",
       )
 
 # python setup.py sdist
