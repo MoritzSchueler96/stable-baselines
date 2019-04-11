@@ -88,18 +88,27 @@ class VecNormalize(VecEnvWrapper):
         self.ret = np.zeros(self.num_envs)
         return self._normalize_observation(obs)
 
-    def save_running_average(self, path):
+    def save_running_average(self, path, suffix=None):
         """
         :param path: (str) path to log dir
+        :param suffix: (str) suffix to file
         """
-        for rms, name in zip([self.obs_rms, self.ret_rms], ['obs_rms', 'ret_rms']):
+        file_names = ['obs_rms', 'ret_rms']
+        if suffix is not None:
+            file_names = [f + suffix for f in file_names]
+        for rms, name in zip([self.obs_rms, self.ret_rms], file_names):
             with open("{}/{}.pkl".format(path, name), 'wb') as file_handler:
                 pickle.dump(rms, file_handler)
 
-    def load_running_average(self, path):
+    def load_running_average(self, path, suffix=None):
         """
         :param path: (str) path to log dir
+        :param suffix: (str) suffix to file
         """
-        for name in ['obs_rms', 'ret_rms']:
+
+        file_names = ['obs_rms', 'ret_rms']
+        if suffix is not None:
+            file_names = [f + suffix for f in file_names]
+        for name in file_names:
             with open("{}/{}.pkl".format(path, name), 'rb') as file_handler:
                 setattr(self, name, pickle.load(file_handler))
