@@ -459,7 +459,7 @@ class Runner(AbstractEnvRunner):
             - infos: (dict) the extra information of the model
         """
         # mb stands for minibatch
-        mb_obs, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs = [], [], [], [], [], []
+        mb_obs, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs, mb_envterms = [], [], [], [], [], [], []
         mb_states = self.states
         ep_infos = []
 
@@ -475,10 +475,15 @@ class Runner(AbstractEnvRunner):
             if isinstance(self.env.action_space, gym.spaces.Box):
                 clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
             self.obs[:], rewards, self.dones, infos = self.env.step(clipped_actions)
+            env_terms = []
             for info in infos:
                 maybe_ep_info = info.get('episode')
+                termination_reason = info.get("termination", None)
                 if maybe_ep_info is not None:
                     ep_infos.append(maybe_ep_info)
+                env_terms.append(termination_reason is not None and termination_reason != "steps")
+            env_terms = np.array(env_terms)
+            mb_envterms.append(env_terms)
             mb_rewards.append(rewards)
         # batch of steps to batch of rollouts
         mb_obs = np.asarray(mb_obs, dtype=self.obs.dtype)
@@ -495,9 +500,11 @@ class Runner(AbstractEnvRunner):
         for step in reversed(range(self.n_steps)):
             if step == self.n_steps - 1:
                 nextnonterminal = 1.0 - self.dones
+                #nextnonterminal = 1.0 - env_terms
                 nextvalues = last_values
             else:
                 nextnonterminal = 1.0 - mb_dones[step + 1]
+                #nextnonterminal = 1.0 - mb_envterms[step + 1]
                 nextvalues = mb_values[step + 1]
             delta = mb_rewards[step] + self.gamma * nextvalues * nextnonterminal - mb_values[step]
             mb_advs[step] = last_gae_lam = delta + self.gamma * self.lam * nextnonterminal * last_gae_lam
