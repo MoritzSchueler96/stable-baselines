@@ -99,11 +99,14 @@ class PPO2(ActorCriticRLModel):
         return Runner(env=self.env, model=self, n_steps=self.n_steps,
                       gamma=self.gamma, lam=self.lam)
 
-    def _get_pretrain_placeholders(self):
+    def _get_pretrain_placeholders(self, get_vf=False):
         policy = self.act_model
         if isinstance(self.action_space, gym.spaces.Discrete):
             return policy.obs_ph, self.action_ph, policy.policy
-        return policy.obs_ph, self.action_ph, policy.deterministic_action
+        if get_vf:
+            return policy.obs_ph, self.action_ph, policy.deterministic_action, self.train_model.obs_ph, self.rewards_ph, self.train_model._value
+        else:
+            return policy.obs_ph, self.action_ph, policy.deterministic_action
 
     def setup_model(self):
         with SetVerbosity(self.verbose):
