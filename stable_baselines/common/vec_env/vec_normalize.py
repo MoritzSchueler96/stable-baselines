@@ -48,10 +48,7 @@ class VecNormalize(VecEnvWrapper):
         self.ret = self.ret * self.gamma + rews
         self.old_obs = obs
         obs = self._normalize_observation(obs)
-        if self.norm_reward:
-            if self.training:
-                self.ret_rms.update(self.ret)
-            rews = np.clip(rews / np.sqrt(self.ret_rms.var + self.epsilon), -self.clip_reward, self.clip_reward)
+        rews = self._normalize_reward(rews)
         self.ret[news] = 0
         return obs, rews, news, infos
 
@@ -67,6 +64,13 @@ class VecNormalize(VecEnvWrapper):
             return obs
         else:
             return obs
+
+    def _normalize_reward(self, rews):
+        if self.norm_reward:
+            if self.training:
+                self.ret_rms.update(self.ret)
+            rews = np.clip(rews / np.sqrt(self.ret_rms.var + self.epsilon), -self.clip_reward, self.clip_reward)
+        return rews
 
     def get_original_obs(self):
         """
@@ -107,8 +111,9 @@ class VecNormalize(VecEnvWrapper):
         """
 
         file_names = ['obs_rms', 'ret_rms']
-        if suffix is not None:
-            file_names = [f + suffix for f in file_names]
         for name in file_names:
-            with open("{}/{}.pkl".format(path, name), 'rb') as file_handler:
+            open_name = name
+            if suffix is not None:
+                open_name += suffix
+            with open("{}/{}.pkl".format(path, open_name), 'rb') as file_handler:
                 setattr(self, name, pickle.load(file_handler))

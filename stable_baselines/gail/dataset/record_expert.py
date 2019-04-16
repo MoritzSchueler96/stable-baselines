@@ -7,6 +7,7 @@ from gym import spaces
 
 from stable_baselines.common.base_class import BaseRLModel
 from stable_baselines.common.vec_env import VecEnv, VecFrameStack
+import tqdm
 
 
 def generate_expert_traj(model, save_path, env=None, n_timesteps=0,
@@ -76,12 +77,15 @@ def generate_expert_traj(model, save_path, env=None, n_timesteps=0,
     if n_timesteps > 0 and isinstance(model, BaseRLModel):
         model.learn(n_timesteps)
 
+    import matplotlib.pyplot as plt
+
     actions = []
     observations = []
     rewards = []
     episode_returns = np.zeros((n_episodes,))
     episode_starts = []
 
+    pbar = tqdm.tqdm(desc="Generating expert dataset", total=n_episodes)
     ep_idx = 0
     obs = env.reset()
     episode_starts.append(True)
@@ -117,6 +121,7 @@ def generate_expert_traj(model, save_path, env=None, n_timesteps=0,
             episode_returns[ep_idx] = reward_sum
             reward_sum = 0.0
             ep_idx += 1
+            pbar.update()
 
     if isinstance(env.observation_space, spaces.Box) and not record_images:
         observations = np.concatenate(observations).reshape((-1,) + env.observation_space.shape)

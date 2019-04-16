@@ -32,7 +32,7 @@ class ExpertDataset(object):
 
     def __init__(self, expert_path, train_fraction=0.7, batch_size=64,
                  traj_limitation=-1, randomize=True, verbose=1,
-                 sequential_preprocessing=False):
+                 sequential_preprocessing=False, use_rewards=False):
         traj_data = np.load(expert_path)
 
         if verbose > 0:
@@ -55,14 +55,16 @@ class ExpertDataset(object):
 
         observations = traj_data['obs'][:traj_limit_idx]
         actions = traj_data['actions'][:traj_limit_idx]
+        if use_rewards:
+            rewards = traj_data['rewards'][:traj_limit_idx]
 
         # obs, actions: shape (N * L, ) + S
         # where N = # episodes, L = episode length
         # and S is the environment observation/action space.
         # S = (1, ) for discrete space
         # Flatten to (N * L, prod(S))
-        if len(observations.shape) > 2:
-            observations = np.reshape(observations, [-1, np.prod(observations.shape[1:])])
+        #if len(observations.shape) > 2:
+        #    observations = np.reshape(observations, [-1, np.prod(observations.shape[1:])])
         if len(actions.shape) > 2:
             actions = np.reshape(actions, [-1, np.prod(actions.shape[1:])])
 
@@ -77,6 +79,7 @@ class ExpertDataset(object):
 
         self.observations = observations
         self.actions = actions
+        self.rewards = None if not use_rewards else rewards
 
         self.returns = traj_data['episode_returns'][:traj_limit_idx]
         self.avg_ret = sum(self.returns) / len(self.returns)
@@ -91,10 +94,10 @@ class ExpertDataset(object):
         self.sequential_preprocessing = sequential_preprocessing
 
         self.dataloader = None
-        self.train_loader = DataLoader(train_indices, self.observations, self.actions, batch_size,
+        self.train_loader = DataLoader(train_indices, self.observations, self.actions, batch_size, rewards=self.rewards,
                                        shuffle=self.randomize, start_process=False,
                                        sequential=sequential_preprocessing)
-        self.val_loader = DataLoader(val_indices, self.observations, self.actions, batch_size,
+        self.val_loader = DataLoader(val_indices, self.observations, self.actions, batch_size, rewards=self.rewards,
                                      shuffle=self.randomize, start_process=False,
                                      sequential=sequential_preprocessing)
 
@@ -185,7 +188,7 @@ class DataLoader(object):
         lesser than the batch_size)
     """
 
-    def __init__(self, indices, observations, actions, batch_size, n_workers=1,
+    def __init__(self, indices, observations, actions, batch_size, rewards=None, n_workers=1,
                  infinite_loop=True, max_queue_len=1, shuffle=False,
                  start_process=True, backend='threading', sequential=False, partial_minibatch=True):
         super(DataLoader, self).__init__()
@@ -208,6 +211,7 @@ class DataLoader(object):
         self.backend = backend
         self.sequential = sequential
         self.start_idx = 0
+        self.rewards = rewards
         if start_process:
             self.start_process()
 
@@ -249,8 +253,14 @@ class DataLoader(object):
                                  axis=0)
 
         actions = self.actions[self._minibatch_indices]
+        if self.rewards is not None:
+            rewards = self.rewards[self._minibatch_indices]
+
         self.start_idx += self.batch_size
-        return obs, actions
+        if self.rewards is not None:
+            return obs, actions, rewards
+        else:
+            return obs, actions
 
     def _run(self):
         start = True
@@ -278,8 +288,12 @@ class DataLoader(object):
                         obs = np.concatenate(obs, axis=0)
 
                     actions = self.actions[self._minibatch_indices]
+                    if self.rewards is not None:
+                        rewards = self.rewards[self._minibatch_indices]
 
-                    self.queue.put((obs, actions))
+                        self.queue.put((obs, actions, rewards))
+                    else:
+                        self.queue.put((obs, actions))
 
                     # Free memory
                     del obs
