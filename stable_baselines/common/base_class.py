@@ -11,7 +11,7 @@ import tensorflow as tf
 
 from stable_baselines.common import set_global_seeds
 from stable_baselines.common.policies import get_policy_from_name, ActorCriticPolicy
-from stable_baselines.common.vec_env import VecEnvWrapper, VecEnv, DummyVecEnv
+from stable_baselines.common.vec_env import VecEnvWrapper, VecEnv, DummyVecEnv, VecNormalize
 from stable_baselines import logger
 
 
@@ -199,7 +199,7 @@ class BaseRLModel(ABC):
                 self._param_load_ops[param.name] = (placeholder, param.assign(placeholder))
 
     @abstractmethod
-    def _get_pretrain_placeholders(self):
+    def _get_pretrain_placeholders(self, get_vf=False):
         """
         Return the placeholders needed for the pretraining:
         - obs_ph: observation placeholder
@@ -213,7 +213,7 @@ class BaseRLModel(ABC):
         pass
 
     def pretrain(self, dataset, n_epochs=10, learning_rate=1e-4,
-                 adam_epsilon=1e-8, val_interval=None):
+                 adam_epsilon=1e-8, val_interval=None, train_vf=False):
         """
         Pretrain a model using behavior cloning:
         supervised learning given an expert dataset.
@@ -244,8 +244,12 @@ class BaseRLModel(ABC):
         with self.graph.as_default():
             with tf.variable_scope('pretrain'):
                 if continuous_actions:
-                    obs_ph, actions_ph, deterministic_actions_ph = self._get_pretrain_placeholders()
+                    if train_vf:
+                        obs_ph, actions_ph, deterministic_actions_ph, vf_obs_ph, rew_ph, vf_ph = self._get_pretrain_placeholders()
+                    else:
+                        obs_ph, actions_ph, deterministic_actions_ph = self._get_pretrain_placeholders(get_vf=True)
                     loss = tf.reduce_mean(tf.square(actions_ph - deterministic_actions_ph))
+                    loss_vf = tf.reduce_mean(tf.square(rew_ph - vf_ph))
                 else:
                     obs_ph, actions_ph, actions_logits_ph = self._get_pretrain_placeholders()
                     # actions_ph has a shape if (n_batch,), we reshape it to (n_batch, 1)
@@ -259,17 +263,36 @@ class BaseRLModel(ABC):
                     loss = tf.reduce_mean(loss)
                 optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, epsilon=adam_epsilon)
                 optim_op = optimizer.minimize(loss, var_list=self.params)
+                optimizer_vf = tf.train.AdamOptimizer(learning_rate=learning_rate, epsilon=adam_epsilon)
+                optim_op_vf = optimizer_vf.minimize(loss_vf, var_list=[var for var in self.params if var.name.startswith("model/vf")])
 
             self.sess.run(tf.global_variables_initializer())
+
+        is_vec_normalize = False
+        if isinstance(self.env, VecNormalize):
+            is_vec_normalize = True
+            # Pretrain Normalization over dataset
+            for i in range(5):
+                for _ in range(len(dataset.train_loader)):
+                    expert_obs, expert_actions, rewards = dataset.get_next_batch('train')
+                    obs = self.env._normalize_observation(expert_obs)
+                    rew = self.env._normalize_reward(rewards)
 
         if self.verbose > 0:
             print("Pretraining with Behavior Cloning...")
 
+        self.env.training = False
+
         for epoch_idx in range(int(n_epochs)):
             train_loss = 0.0
+            if train_vf:
+                train_loss_vf = 0.0
             # Full pass on the training set
             for _ in range(len(dataset.train_loader)):
-                expert_obs, expert_actions = dataset.get_next_batch('train')
+                batch = dataset.get_next_batch('train')
+                expert_obs, expert_actions = batch[0], batch[1]
+                if is_vec_normalize:
+                    expert_obs = self.env._normalize_observation(expert_obs)
                 feed_dict = {
                     obs_ph: expert_obs,
                     actions_ph: expert_actions,
@@ -277,25 +300,68 @@ class BaseRLModel(ABC):
                 train_loss_, _ = self.sess.run([loss, optim_op], feed_dict)
                 train_loss += train_loss_
 
+                if train_vf:
+                    constraint_dones = np.abs(rewards) > 10
+
+                    if is_vec_normalize:
+                        rewards = self.env._normalize_reward(rewards)
+
+                    feed_dict = {
+                        vf_obs_ph: expert_obs[~constraint_dones],
+                        rew_ph: rewards[~constraint_dones]
+                    }
+
+                    train_loss_vf_, _ = self.sess.run([loss_vf, optim_op_vf], feed_dict)
+                    train_loss_vf += train_loss_vf_
+
             train_loss /= len(dataset.train_loader)
+            if train_vf:
+                train_loss_vf /= len(dataset.train_loader)
 
             if self.verbose > 0 and (epoch_idx + 1) % val_interval == 0:
                 val_loss = 0.0
+                if train_vf:
+                    val_loss_vf = 0.0
                 # Full pass on the validation set
                 for _ in range(len(dataset.val_loader)):
-                    expert_obs, expert_actions = dataset.get_next_batch('val')
+                    batch = dataset.get_next_batch('val')
+                    expert_obs, expert_actions = batch[0], batch[1]
+                    if is_vec_normalize:
+                        expert_obs = self.env._normalize_observation(expert_obs)
                     val_loss_, = self.sess.run([loss], {obs_ph: expert_obs,
                                                         actions_ph: expert_actions})
                     val_loss += val_loss_
 
+                    if train_vf:
+                        constraint_dones = np.abs(rewards) > 10
+                        if is_vec_normalize:
+                            rewards = self.env._normalize_reward(rewards)
+
+                        feed_dict = {
+                            vf_obs_ph: expert_obs[~constraint_dones],
+                            rew_ph: rewards[~constraint_dones]
+                        }
+
+                        val_loss_vf_, = self.sess.run([loss_vf], feed_dict)
+                        val_loss_vf += val_loss_vf_
+
                 val_loss /= len(dataset.val_loader)
+                if train_vf:
+                    val_loss_vf /= len(dataset.val_loader)
+
                 if self.verbose > 0:
                     print("==== Training progress {:.2f}% ====".format(100 * (epoch_idx + 1) / n_epochs))
                     print('Epoch {}'.format(epoch_idx + 1))
                     print("Training loss: {:.6f}, Validation loss: {:.6f}".format(train_loss, val_loss))
+                    if train_vf:
+                        print("VF Training loss: {:.6f}, Validation loss: {:.6f}".format(train_loss_vf, val_loss_vf))
                     print()
             # Free memory
             del expert_obs, expert_actions
+            if train_vf:
+                del rewards
+
+        self.env.training = True
         if self.verbose > 0:
             print("Pretraining done.")
         return self
