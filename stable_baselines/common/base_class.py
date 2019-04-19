@@ -319,9 +319,9 @@ class BaseRLModel(ABC):
             with tf.variable_scope('pretrain'):
                 if continuous_actions:
                     if train_vf:
-                        obs_ph, actions_ph, deterministic_actions_ph, vf_obs_ph, rew_ph, vf_ph = self._get_pretrain_placeholders()
+                        obs_ph, actions_ph, deterministic_actions_ph, vf_obs_ph, rew_ph, vf_ph = self._get_pretrain_placeholders(get_vf=True)
                     else:
-                        obs_ph, actions_ph, deterministic_actions_ph = self._get_pretrain_placeholders(get_vf=True)
+                        obs_ph, actions_ph, deterministic_actions_ph = self._get_pretrain_placeholders()
                     loss = tf.reduce_mean(tf.square(actions_ph - deterministic_actions_ph))
                     loss_vf = tf.reduce_mean(tf.square(rew_ph - vf_ph))
                 else:
@@ -350,7 +350,7 @@ class BaseRLModel(ABC):
                 for _ in range(len(dataset.train_loader)):
                     expert_obs, expert_actions, rewards = dataset.get_next_batch('train')
                     obs = self.env._normalize_observation(expert_obs)
-                    rew = self.env._normalize_reward(rewards)
+                    #rew = self.env._normalize_reward(rewards)
 
         if self.verbose > 0:
             print("Pretraining with Behavior Cloning...")
@@ -375,10 +375,11 @@ class BaseRLModel(ABC):
                 train_loss += train_loss_
 
                 if train_vf:
-                    constraint_dones = np.abs(rewards) > 10
+                    rewards = batch[2]
+                    constraint_dones = np.abs(rewards) > 5
 
-                    if is_vec_normalize:
-                        rewards = self.env._normalize_reward(rewards)
+                    #if is_vec_normalize:
+                    #    rewards = self.env._normalize_reward(rewards)
 
                     feed_dict = {
                         vf_obs_ph: expert_obs[~constraint_dones],
@@ -407,9 +408,10 @@ class BaseRLModel(ABC):
                     val_loss += val_loss_
 
                     if train_vf:
-                        constraint_dones = np.abs(rewards) > 10
-                        if is_vec_normalize:
-                            rewards = self.env._normalize_reward(rewards)
+                        rewards = batch[2]
+                        constraint_dones = np.abs(rewards) > 5
+                        #if is_vec_normalize:
+                        #    rewards = self.env._normalize_reward(rewards)
 
                         feed_dict = {
                             vf_obs_ph: expert_obs[~constraint_dones],
