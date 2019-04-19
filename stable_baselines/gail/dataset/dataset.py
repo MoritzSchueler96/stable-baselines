@@ -56,7 +56,7 @@ class ExpertDataset(object):
                 if n_episodes == (traj_limitation + 1):
                     traj_limit_idx = idx - 1
 
-        observations = traj_data['obs'][:traj_limit_idx]
+        observations = traj_data['obs'][:traj_limit_idx][:, :, :9]
         actions = traj_data['actions'][:traj_limit_idx]
         if use_rewards:
             rewards = traj_data['rewards'][:traj_limit_idx]
