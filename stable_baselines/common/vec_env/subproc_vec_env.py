@@ -16,7 +16,7 @@ def _worker(remote, parent_remote, env_fn_wrapper):
             cmd, data = remote.recv()
             if cmd == 'step':
                 observation, reward, done, info = env.step(data)
-                if done:
+                if done and getattr(env, "training", True):
                     # save final observation where user can get it, then reset
                     info['terminal_observation'] = observation
                     observation = env.reset()
@@ -24,7 +24,7 @@ def _worker(remote, parent_remote, env_fn_wrapper):
             elif cmd == 'seed':
                 remote.send(env.seed(data))
             elif cmd == 'reset':
-                observation = env.reset()
+                observation = env.reset(*data[0], **data[1])
                 remote.send(observation)
             elif cmd == 'render':
                 remote.send(env.render(*data[0], **data[1]))
@@ -114,9 +114,9 @@ class SubprocVecEnv(VecEnv):
             remote.send(('seed', seed + idx))
         return [remote.recv() for remote in self.remotes]
 
-    def reset(self):
+    def reset(self, *args, **kwargs):
         for remote in self.remotes:
-            remote.send(('reset', None))
+            remote.send(('reset', (args, {**kwargs})))
         obs = [remote.recv() for remote in self.remotes]
         return _flatten_obs(obs, self.observation_space)
 
@@ -132,8 +132,8 @@ class SubprocVecEnv(VecEnv):
             process.join()
         self.closed = True
 
-    def render(self, mode='human', *args, **kwargs):
-        self.remotes[0].send(('render', (args, {**kwargs})))
+    def render(self, mode='plot', *args, **kwargs):
+        self.remotes[0].send(('render', (args, {**kwargs, "mode": mode})))
         self.remotes[0].recv()
         return
 
