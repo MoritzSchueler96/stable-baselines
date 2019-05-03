@@ -80,11 +80,11 @@ class VecNormalize(VecEnvWrapper):
         """
         return self.old_obs
 
-    def reset(self):
+    def reset(self, *args, **kwargs):
         """
         Reset all environments
         """
-        obs = self.venv.reset()
+        obs = self.venv.reset(*args, **kwargs)
         if len(np.array(obs).shape) == 1:  # for when num_cpu is 1
             self.old_obs = [obs]
         else:

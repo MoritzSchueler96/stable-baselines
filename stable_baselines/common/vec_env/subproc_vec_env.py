@@ -16,11 +16,11 @@ def _worker(remote, parent_remote, env_fn_wrapper):
             cmd, data = remote.recv()
             if cmd == 'step':
                 observation, reward, done, info = env.step(data)
-                if done:
+                if done and getattr(env, "training", True):
                     observation = env.reset()
                 remote.send((observation, reward, done, info))
             elif cmd == 'reset':
-                observation = env.reset()
+                observation = env.reset(*data[0], **data[1])
                 remote.send(observation)
             elif cmd == 'render':
                 remote.send(env.render(*data[0], **data[1]))
@@ -100,9 +100,9 @@ class SubprocVecEnv(VecEnv):
         obs, rews, dones, infos = zip(*results)
         return _flatten_obs(obs, self.observation_space), np.stack(rews), np.stack(dones), infos
 
-    def reset(self):
+    def reset(self, *args, **kwargs):
         for remote in self.remotes:
-            remote.send(('reset', None))
+            remote.send(('reset', (args, {**kwargs})))
         obs = [remote.recv() for remote in self.remotes]
         return _flatten_obs(obs, self.observation_space)
 
@@ -118,8 +118,8 @@ class SubprocVecEnv(VecEnv):
             process.join()
         self.closed = True
 
-    def render(self, mode='human', *args, **kwargs):
-        self.remotes[0].send(('render', (args, {**kwargs})))
+    def render(self, mode='plot', *args, **kwargs):
+        self.remotes[0].send(('render', (args, {**kwargs, "mode": mode})))
         self.remotes[0].recv()
         return
         for pipe in self.remotes:
