@@ -4,12 +4,12 @@ from typing import Dict
 
 import cv2  # pytype:disable=import-error
 import numpy as np
+import tqdm
 from gym import spaces
 
 from stable_baselines.common.base_class import BaseRLModel
-from stable_baselines.common.vec_env import VecEnv, VecFrameStack
 from stable_baselines.common.base_class import _UnvecWrapper
-import tqdm
+from stable_baselines.common.vec_env import VecEnv, VecFrameStack
 
 
 def generate_expert_traj(model, save_path=None, env=None, n_timesteps=0,
@@ -86,8 +86,6 @@ def generate_expert_traj(model, save_path=None, env=None, n_timesteps=0,
 
     if n_timesteps > 0 and isinstance(model, BaseRLModel):
         model.learn(n_timesteps)
-
-    import matplotlib.pyplot as plt
 
     actions = []
     observations = []
