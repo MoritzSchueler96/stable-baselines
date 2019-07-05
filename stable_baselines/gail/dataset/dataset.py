@@ -242,6 +242,13 @@ class DataLoader(object):
         """
         return self.indices[self.start_idx:self.start_idx + self.batch_size]
 
+    # TODO: Fix reward return for value function pretraining
+    # Have to sum up future rewards
+    # process entire array at start is probably best idea
+    # cumulative sum up until each episode start
+    # what to do at episode start?
+    #
+
     def sequential_next(self):
         """
         Sequential version of the pre-processing.
