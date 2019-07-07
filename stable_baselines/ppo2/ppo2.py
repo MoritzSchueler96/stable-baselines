@@ -104,7 +104,7 @@ class PPO2(ActorCriticRLModel):
         if isinstance(self.action_space, gym.spaces.Discrete):
             return policy.obs_ph, self.action_ph, policy.policy
         if get_vf:
-            return policy.obs_ph, self.action_ph, policy.deterministic_action, self.train_model.obs_ph, self.rewards_ph, self.train_model._value
+            return policy.obs_ph, self.action_ph, policy.deterministic_action, self.train_model.obs_ph, self.rewards_ph, self.train_model._value_flat
         else:
             return policy.obs_ph, self.action_ph, policy.deterministic_action
 

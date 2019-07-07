@@ -48,7 +48,10 @@ class VecNormalize(VecEnvWrapper):
         self.ret = self.ret * self.gamma + rews
         self.old_obs = obs
         obs = self._normalize_observation(obs)
-        rews = self._normalize_reward(rews)
+        if self.norm_reward:
+            if self.training:
+                self.ret_rms.update(self.ret)
+            rews = np.clip(rews / np.sqrt(self.ret_rms.var + self.epsilon), -self.clip_reward, self.clip_reward)
         self.ret[news] = 0
         return obs, rews, news, infos
 
@@ -64,13 +67,6 @@ class VecNormalize(VecEnvWrapper):
             return obs
         else:
             return obs
-
-    def _normalize_reward(self, rews):
-        if self.norm_reward:
-            if self.training:
-                self.ret_rms.update(self.ret)
-            rews = np.clip(rews / np.sqrt(self.ret_rms.var + self.epsilon), -self.clip_reward, self.clip_reward)
-        return rews
 
     def get_original_obs(self):
         """

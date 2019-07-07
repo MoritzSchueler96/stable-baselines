@@ -1,6 +1,7 @@
 import queue
 import time
 from multiprocessing import Queue, Process
+import scipy.signal
 
 import cv2
 import numpy as np
@@ -31,7 +32,7 @@ class ExpertDataset(object):
         the data (slower but use less memory for the CI)
     """
     def __init__(self, expert_path=None, traj_data=None, train_fraction=0.7, batch_size=64,
-                 traj_limitation=-1, randomize=True, verbose=1, sequential_preprocessing=False, use_rewards=False):
+                 traj_limitation=-1, randomize=True, verbose=1, sequential_preprocessing=False, use_vf=False, discount_rate=0.99):
         if traj_data is not None and expert_path is not None:
             raise ValueError("Cannot specify both 'traj_data' and 'expert_path'")
         if traj_data is None and expert_path is None:
@@ -57,9 +58,9 @@ class ExpertDataset(object):
                 if n_episodes == (traj_limitation + 1):
                     traj_limit_idx = idx - 1
 
-        observations = traj_data['obs'][:traj_limit_idx][:, :, :9]
+        observations = traj_data['obs'][:traj_limit_idx]
         actions = traj_data['actions'][:traj_limit_idx]
-        if use_rewards:
+        if use_vf:
             rewards = traj_data['rewards'][:traj_limit_idx]
 
         # obs, actions: shape (N * L, ) + S
@@ -83,7 +84,22 @@ class ExpertDataset(object):
 
         self.observations = observations
         self.actions = actions
-        self.rewards = None if not use_rewards else rewards
+
+        if use_vf:
+            self.vf_vals = {}
+            eps_start_i = np.nonzero(traj_data["episode_starts"])[0]
+            for i in range(1, len(eps_start_i)):
+                ep_rews = rewards[eps_start_i[i - 1]:eps_start_i[i]]
+                sefr = scipy.signal.lfilter([1], [1, -discount_rate], x=ep_rews[::-1])[::-1]
+
+                # The timesteps whose horizon is cut off by episode end
+                horizon_len = int(-np.log(20) / np.log(discount_rate))
+
+                sefr = sefr[:-horizon_len]
+
+                self.vf_vals.update({eps_start_i[i - 1] + sefr_i: v for sefr_i, v in enumerate(sefr)})
+        else:
+            self.vf_vals = None
 
         self.returns = traj_data['episode_returns'][:traj_limit_idx]
         self.avg_ret = sum(self.returns) / len(self.returns)
@@ -98,10 +114,10 @@ class ExpertDataset(object):
         self.sequential_preprocessing = sequential_preprocessing
 
         self.dataloader = None
-        self.train_loader = DataLoader(train_indices, self.observations, self.actions, batch_size, rewards=self.rewards,
+        self.train_loader = DataLoader(train_indices, self.observations, self.actions, batch_size, vf_vals=self.vf_vals,
                                        shuffle=self.randomize, start_process=False,
                                        sequential=sequential_preprocessing)
-        self.val_loader = DataLoader(val_indices, self.observations, self.actions, batch_size, rewards=self.rewards,
+        self.val_loader = DataLoader(val_indices, self.observations, self.actions, batch_size, vf_vals=self.vf_vals,
                                      shuffle=self.randomize, start_process=False,
                                      sequential=sequential_preprocessing)
 
@@ -195,7 +211,7 @@ class DataLoader(object):
         lesser than the batch_size)
     """
 
-    def __init__(self, indices, observations, actions, batch_size, rewards=None, n_workers=1,
+    def __init__(self, indices, observations, actions, batch_size, vf_vals=None, n_workers=1,
                  infinite_loop=True, max_queue_len=1, shuffle=False,
                  start_process=True, backend='threading', sequential=False, partial_minibatch=True):
         super(DataLoader, self).__init__()
@@ -218,7 +234,7 @@ class DataLoader(object):
         self.backend = backend
         self.sequential = sequential
         self.start_idx = 0
-        self.rewards = rewards
+        self.vf_vals = vf_vals
         if start_process:
             self.start_process()
 
@@ -267,12 +283,12 @@ class DataLoader(object):
                                  axis=0)
 
         actions = self.actions[self._minibatch_indices]
-        if self.rewards is not None:
-            rewards = self.rewards[self._minibatch_indices]
+        if self.vf_vals is not None:
+            vf_vals = [self.vf_vals[ind] if ind in self.vf_vals else np.nan for ind in self._minibatch_indices]
 
         self.start_idx += self.batch_size
-        if self.rewards is not None:
-            return obs, actions, rewards
+        if self.vf_vals is not None:
+            return obs, actions, vf_vals
         else:
             return obs, actions
 
@@ -302,10 +318,10 @@ class DataLoader(object):
                         obs = np.concatenate(obs, axis=0)
 
                     actions = self.actions[self._minibatch_indices]
-                    if self.rewards is not None:
-                        rewards = self.rewards[self._minibatch_indices]
+                    if self.vf_vals is not None:
+                        vf_vals = [self.vf_vals[ind] if ind in self.vf_vals else np.nan for ind in self._minibatch_indices]
 
-                        self.queue.put((obs, actions, rewards))
+                        self.queue.put((obs, actions, vf_vals))
                     else:
                         self.queue.put((obs, actions))
 

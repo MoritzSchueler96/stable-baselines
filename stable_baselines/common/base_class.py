@@ -213,7 +213,7 @@ class BaseRLModel(ABC):
         pass
 
     def pretrain(self, dataset, n_epochs=10, learning_rate=1e-4,
-                 adam_epsilon=1e-8, val_interval=None, train_vf=False):
+                 adam_epsilon=1e-8, val_interval=None, train_vf=False, discount_rate=0.99):
         """
         Pretrain a model using behavior cloning:
         supervised learning given an expert dataset.
@@ -272,11 +272,13 @@ class BaseRLModel(ABC):
         if isinstance(self.env, VecNormalize):
             is_vec_normalize = True
             # Pretrain Normalization over dataset
-            for i in range(5):
+            its = 0
+            while its < 1e5:
                 for _ in range(len(dataset.train_loader)):
-                    expert_obs, expert_actions, rewards = dataset.get_next_batch('train')
+                    expert_obs, expert_actions, vf_vals = dataset.get_next_batch('train')
                     obs = self.env._normalize_observation(expert_obs)
-                    #rew = self.env._normalize_reward(rewards)
+                    #vf_vals = self.env._normalize_reward(np.array(vf_vals) * (1 - 0.99 / 1))
+                its += len(dataset.train_loader)
 
         if self.verbose > 0:
             print("Pretraining with Behavior Cloning...")
@@ -293,23 +295,24 @@ class BaseRLModel(ABC):
                 expert_obs, expert_actions = batch[0], batch[1]
                 if is_vec_normalize:
                     expert_obs = self.env._normalize_observation(expert_obs)
+
                 feed_dict = {
                     obs_ph: expert_obs,
                     actions_ph: expert_actions,
                 }
+
                 train_loss_, _ = self.sess.run([loss, optim_op], feed_dict)
                 train_loss += train_loss_
 
                 if train_vf:
-                    rewards = batch[2]
-                    constraint_dones = np.abs(rewards) > 5
+                    vf_vals = np.array(batch[2])
 
                     #if is_vec_normalize:
-                    #    rewards = self.env._normalize_reward(rewards)
+                    #    vf_vals = self.env._normalize_reward(vf_vals) * 1 / (1 - discount_rate)
 
                     feed_dict = {
-                        vf_obs_ph: expert_obs[~constraint_dones],
-                        rew_ph: rewards[~constraint_dones]
+                        vf_obs_ph: expert_obs[~np.isnan(vf_vals)],
+                        rew_ph: vf_vals[~np.isnan(vf_vals)]
                     }
 
                     train_loss_vf_, _ = self.sess.run([loss_vf, optim_op_vf], feed_dict)
@@ -334,14 +337,14 @@ class BaseRLModel(ABC):
                     val_loss += val_loss_
 
                     if train_vf:
-                        rewards = batch[2]
-                        constraint_dones = np.abs(rewards) > 5
+                        vf_vals = np.array(batch[2])
+
                         #if is_vec_normalize:
-                        #    rewards = self.env._normalize_reward(rewards)
+                        #    vf_vals = self.env._normalize_reward(vf_vals) * 1 / (1 - discount_rate)
 
                         feed_dict = {
-                            vf_obs_ph: expert_obs[~constraint_dones],
-                            rew_ph: rewards[~constraint_dones]
+                            vf_obs_ph: expert_obs[~np.isnan(vf_vals)],
+                            rew_ph: vf_vals[~np.isnan(vf_vals)]
                         }
 
                         val_loss_vf_, = self.sess.run([loss_vf], feed_dict)
@@ -361,7 +364,7 @@ class BaseRLModel(ABC):
             # Free memory
             del expert_obs, expert_actions
             if train_vf:
-                del rewards
+                del vf_vals
 
         self.env.training = True
         if self.verbose > 0:
