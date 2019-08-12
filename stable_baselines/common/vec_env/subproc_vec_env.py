@@ -66,7 +66,7 @@ class SubprocVecEnv(VecEnv):
            Defaults to 'fork' on available platforms, and 'spawn' otherwise.
     """
 
-    def __init__(self, env_fns, start_method=None):
+    def __init__(self, env_fns, start_method=None, sampler_manager=None):
         self.waiting = False
         self.closed = False
         n_envs = len(env_fns)
@@ -91,6 +91,7 @@ class SubprocVecEnv(VecEnv):
 
         self.remotes[0].send(('get_spaces', None))
         observation_space, action_space = self.remotes[0].recv()
+        self.sampler_manager = sampler_manager
         VecEnv.__init__(self, len(env_fns), observation_space, action_space)
 
     def step_async(self, actions):
