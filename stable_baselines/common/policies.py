@@ -32,8 +32,28 @@ def nature_cnn(scaled_images, **kwargs):
 def cnn_mlp_extractor(obs, net_arch, act_fun, **kwargs):
     n_filters = kwargs.pop("c1_n_filters", 3)
     obs = tf.expand_dims(obs, -1)
-    conv_layer = act_fun(conv(obs, "c1", n_filters=n_filters, filter_size=(obs.shape[1], 1), stride=1, init_scale=np.sqrt(2), **kwargs))
-    return mlp_extractor(conv_to_fc(conv_layer), net_arch, act_fun)
+    conv_vf = kwargs.pop("cnn_vf", True)
+    shared = kwargs.pop("cnn_shared", None)
+    if not conv_vf:
+        vf_obs = obs
+        if len(obs.shape) == 4:
+            vf_obs = vf_obs[:, 0, :, 0]
+        vf_mlp = mlp_extractor(vf_obs, [dict(vf=net_arch[-1]["vf"])], act_fun)[1]
+        pi_conv = act_fun(conv(obs, "pi_c1", n_filters=n_filters, filter_size=(obs.shape[1], 1), stride=1, init_scale=np.sqrt(2), **kwargs))
+        # TODO: does support for other shared layers here make sense.
+        pi_mlp = mlp_extractor(conv_to_fc(pi_conv), [dict(pi=net_arch[-1]["pi"])], act_fun)[0]
+        return pi_mlp, vf_mlp
+    elif shared or shared is None:
+        name = "shared_c1" if shared is not None else "c1"  # Backwards Compatability
+        conv_layer = act_fun(conv(obs, name, n_filters=n_filters, filter_size=(obs.shape[1], 1), stride=1, init_scale=np.sqrt(2), **kwargs))
+        return mlp_extractor(conv_to_fc(conv_layer), net_arch, act_fun)
+    else:
+        pi_conv = act_fun(conv(obs, "pi_c1", n_filters=n_filters, filter_size=(obs.shape[1], 1), stride=1, init_scale=np.sqrt(2), **kwargs))
+        vf_conv = act_fun(conv(obs, "vf_c1", n_filters=n_filters, filter_size=(obs.shape[1], 1), stride=1, init_scale=np.sqrt(2), **kwargs))
+        # TODO: does support for other shared layers here make sense.
+        pi_mlp = mlp_extractor(conv_to_fc(pi_conv), [dict(pi=net_arch[-1]["pi"])], act_fun)[0]
+        vf_mlp = mlp_extractor(conv_to_fc(vf_conv), [dict(vf=net_arch[-1]["vf"])], act_fun)[1]
+        return pi_mlp, vf_mlp
 
 
 def mlp_extractor(flat_observations, net_arch, act_fun):
