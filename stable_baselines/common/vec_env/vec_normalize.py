@@ -22,9 +22,9 @@ class VecNormalize(VecEnvWrapper):
     """
 
     def __init__(self, venv, training=True, norm_obs=True, norm_reward=True,
-                 clip_obs=10., clip_reward=10., gamma=0.99, epsilon=1e-8):
+                 clip_obs=10., clip_reward=10., gamma=0.99, epsilon=1e-8, mean_mask=None):
         VecEnvWrapper.__init__(self, venv)
-        self.obs_rms = RunningMeanStd(shape=self.observation_space.shape)
+        self.obs_rms = RunningMeanStd(shape=self.observation_space.shape, mean_mask=mean_mask)
         self.ret_rms = RunningMeanStd(shape=())
         self.clip_obs = clip_obs
         self.clip_reward = clip_reward
