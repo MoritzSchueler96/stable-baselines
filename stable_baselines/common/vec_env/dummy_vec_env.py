@@ -54,8 +54,8 @@ class DummyVecEnv(VecEnv):
             seeds.append(env.seed(seed + idx))
         return seeds
 
-    def reset(self):
-        for env_idx in range(self.num_envs):
+    def reset(self, indices=None, *args, **kwargs):
+        for env_idx in self._get_indices(indices):
             obs = self.envs[env_idx].reset()
             self._save_obs(env_idx, obs)
         return self._obs_from_buf()
@@ -67,20 +67,12 @@ class DummyVecEnv(VecEnv):
     def get_images(self, *args, **kwargs) -> Sequence[np.ndarray]:
         return [env.render(*args, mode='rgb_array', **kwargs) for env in self.envs]
 
-    def render(self, *args, **kwargs):
-        """
-        Gym environment rendering. If there are multiple environments then
-        they are tiled together in one image via `BaseVecEnv.render()`.
-        Otherwise (if `self.num_envs == 1`), we pass the render call directly to the
-        underlying environment.
-
-        Therefore, some arguments such as `mode` will have values that are valid
-        only when `num_envs == 1`.
-
-        :param mode: The rendering type.
-        """
-        if self.num_envs == 1:
-            return self.envs[0].render(*args, **kwargs)
+    def render(self, indices, *args, **kwargs):
+        envs = self._get_target_envs(indices)
+        if len(envs) == 1:
+            return envs[0].render(*args, **kwargs)
+        #if self.num_envs == 1:
+        #    return self.envs[0].render(*args, **kwargs)
         else:
             return super().render(*args, **kwargs)
 
