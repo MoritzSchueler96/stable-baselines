@@ -11,20 +11,28 @@ from stable_baselines.common.vec_env.base_vec_env import VecEnv, CloudpickleWrap
 def _worker(remote, parent_remote, env_fn_wrapper):
     parent_remote.close()
     env = env_fn_wrapper.var()
+    done = False
+    last_step_data = None
     while True:
         try:
             cmd, data = remote.recv()
             if cmd == 'step':
-                observation, reward, done, info = env.step(data)
-                if done and getattr(env, "training", True):
-                    # save final observation where user can get it, then reset
-                    info['terminal_observation'] = observation
-                    observation = env.reset()
-                remote.send((observation, reward, done, info))
+                if not done:
+                    observation, reward, done, info = env.step(data)
+                    if done and getattr(env, "training", True):
+                        done = False
+                        observation = env.reset()
+                    elif done:
+                        last_step_data = (observation, reward, done, info)
+                    remote.send((observation, reward, done, info))
+                else:
+                    remote.send(last_step_data)
             elif cmd == 'seed':
                 remote.send(env.seed(data))
             elif cmd == 'reset':
                 observation = env.reset(*data[0], **data[1])
+                done = False
+                last_step_data = None
                 remote.send(observation)
             elif cmd == 'render':
                 remote.send(env.render(*data[0], **data[1]))
