@@ -44,8 +44,8 @@ class DummyVecEnv(VecEnv):
         return (self._obs_from_buf(), np.copy(self.buf_rews), np.copy(self.buf_dones),
                 self.buf_infos.copy())
 
-    def reset(self):
-        for env_idx in range(self.num_envs):
+    def reset(self, indices=None, *args, **kwargs):
+        for env_idx in self._get_indices(indices):
             obs = self.envs[env_idx].reset()
             self._save_obs(env_idx, obs)
         return self._obs_from_buf()
@@ -57,9 +57,12 @@ class DummyVecEnv(VecEnv):
     def get_images(self):
         return [env.render(mode='rgb_array') for env in self.envs]
 
-    def render(self, *args, **kwargs):
-        if self.num_envs == 1:
-            return self.envs[0].render(*args, **kwargs)
+    def render(self, indices, *args, **kwargs):
+        envs = self._get_target_envs(indices)
+        if len(envs) == 1:
+            return envs[0].render(*args, **kwargs)
+        #if self.num_envs == 1:
+        #    return self.envs[0].render(*args, **kwargs)
         else:
             return super().render(*args, **kwargs)
 

@@ -105,10 +105,18 @@ class SubprocVecEnv(VecEnv):
         obs, rews, dones, infos = zip(*results)
         return _flatten_obs(obs, self.observation_space), np.stack(rews), np.stack(dones), infos
 
-    def reset(self, *args, **kwargs):
-        for remote in self.remotes:
-            remote.send(('reset', (args, {**kwargs})))
-        obs = [remote.recv() for remote in self.remotes]
+    def reset(self, indices=None, *args, **kwargs):
+        if kwargs and (isinstance(kwargs["state"], list) or isinstance(kwargs["state"], np.ndarray)):
+            kwargs_list = True
+        else:
+            kwargs_list = False
+        for i, remote in enumerate(self._get_target_remotes(indices)):
+            if kwargs_list:
+                kwargs_i = {k: v[i] for k, v in kwargs.items()}
+            else:
+                kwargs_i = kwargs
+            remote.send(('reset', (args, {**kwargs_i})))
+        obs = [remote.recv() for i, remote in enumerate(self._get_target_remotes(indices))]
         return _flatten_obs(obs, self.observation_space)
 
     def close(self):
@@ -123,15 +131,16 @@ class SubprocVecEnv(VecEnv):
             process.join()
         self.closed = True
 
-    def render(self, mode='plot', *args, **kwargs):
-        self.remotes[0].send(('render', (args, {**kwargs, "mode": mode})))
-        self.remotes[0].recv()
-        return
-        for pipe in self.remotes:
+    def render(self, indices=None, *args, **kwargs):
+        for pipe in self._get_target_remotes(indices):
             # gather images from subprocesses
             # `mode` will be taken into account later
-            pipe.send(('render', (args, {'mode': 'rgb_array', **kwargs})))
-        imgs = [pipe.recv() for pipe in self.remotes]
+            pipe.send(('render', (args, {**kwargs})))
+        figs = [pipe.recv() for pipe in self._get_target_remotes(indices)]
+        if isinstance(indices, int):
+            figs = figs[0]
+
+        return figs
         # Create a big image by tiling images from subprocesses
         bigimg = tile_images(imgs)
         if mode == 'human':
