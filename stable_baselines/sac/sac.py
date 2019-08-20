@@ -552,7 +552,8 @@ class SAC(OffPolicyRLModel):
             "action_noise": self.action_noise,
             "random_exploration": self.random_exploration,
             "_vectorize_action": self._vectorize_action,
-            "policy_kwargs": self.policy_kwargs
+            "policy_kwargs": self.policy_kwargs,
+            "num_timesteps": self.num_timesteps
         }
 
         params_to_save = self.get_parameters()
