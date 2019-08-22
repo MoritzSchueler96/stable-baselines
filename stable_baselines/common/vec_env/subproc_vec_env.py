@@ -11,16 +11,16 @@ from stable_baselines.common.tile_images import tile_images
 def _worker(remote, parent_remote, env_fn_wrapper):
     parent_remote.close()
     env = env_fn_wrapper.var()
-    done = False
+    done_not_reset = False
     last_step_data = None
     while True:
         try:
             cmd, data = remote.recv()
             if cmd == 'step':
-                if not done:
+                if not done_not_reset:
                     observation, reward, done, info = env.step(data)
                     if done and getattr(env, "training", True):
-                        done = False
+                        done_not_reset = False
                         observation = env.reset()
                     elif done:
                         last_step_data = (observation, reward, done, info)
@@ -29,7 +29,7 @@ def _worker(remote, parent_remote, env_fn_wrapper):
                     remote.send(last_step_data)
             elif cmd == 'reset':
                 observation = env.reset(*data[0], **data[1])
-                done = False
+                done_not_reset = False
                 last_step_data = None
                 remote.send(observation)
             elif cmd == 'render':
