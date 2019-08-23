@@ -23,6 +23,7 @@ def _worker(remote, parent_remote, env_fn_wrapper):
                         done_not_reset = False
                         observation = env.reset()
                     elif done:
+                        done_not_reset = True
                         last_step_data = (observation, reward, done, info)
                     remote.send((observation, reward, done, info))
                 else:
