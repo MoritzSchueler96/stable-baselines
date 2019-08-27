@@ -97,7 +97,7 @@ class FeedForwardPolicy(TD3Policy):
 
     def __init__(self, sess, ob_space, ac_space, n_env=1, n_steps=1, n_batch=None, reuse=False, layers=None,
                  cnn_extractor=nature_cnn, feature_extraction="cnn",
-                 layer_norm=False, act_fun=tf.nn.relu, **kwargs):
+                 layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
         super(FeedForwardPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch,
                                                 reuse=reuse, scale=(feature_extraction == "cnn"))
 
@@ -110,6 +110,7 @@ class FeedForwardPolicy(TD3Policy):
         if layers is None:
             layers = [64, 64]
         self.layers = layers
+        self.obs_module_indices = obs_module_indices
 
         assert len(layers) >= 1, "Error: must have at least one hidden layer for the policy."
 
@@ -118,6 +119,9 @@ class FeedForwardPolicy(TD3Policy):
     def make_actor(self, obs=None, reuse=False, scope="pi"):
         if obs is None:
             obs = self.processed_obs
+
+        if self.obs_module_indices is not None:
+            obs = tf.gather(obs, self.obs_module_indices["pi"], axis=-2)
 
         with tf.variable_scope(scope, reuse=reuse):
             if self.feature_extraction == "cnn":
@@ -134,6 +138,9 @@ class FeedForwardPolicy(TD3Policy):
     def make_critics(self, obs=None, action=None, reuse=False, scope="values_fn"):
         if obs is None:
             obs = self.processed_obs
+
+        if self.obs_module_indices is not None:
+            obs = tf.gather(obs, self.obs_module_indices["vf"], axis=-2)
 
         with tf.variable_scope(scope, reuse=reuse):
             if self.feature_extraction == "cnn":
