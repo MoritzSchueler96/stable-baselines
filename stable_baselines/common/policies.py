@@ -29,34 +29,40 @@ def nature_cnn(scaled_images, **kwargs):
     return activ(linear(layer_3, 'fc1', n_hidden=512, init_scale=np.sqrt(2)))
 
 
-def cnn_mlp_extractor(obs, net_arch, act_fun, **kwargs):
+def cnn_mlp_extractor(obs, net_arch, act_fun, select_idxs=None, **kwargs):
     n_filters = kwargs.pop("c1_n_filters", 3)
     obs = tf.expand_dims(obs, -1)
     conv_vf = kwargs.pop("cnn_vf", True)
     shared = kwargs.pop("cnn_shared", None)
-    if not conv_vf:
-        vf_obs = obs
-        if len(obs.shape) == 4:
-            vf_obs = vf_obs[:, 0, :, 0]
-        vf_mlp = mlp_extractor(vf_obs, [dict(vf=net_arch[-1]["vf"])], act_fun)[1]
-        pi_conv = act_fun(conv(obs, "pi_c1", n_filters=n_filters, filter_size=(obs.shape[1], 1), stride=1, init_scale=np.sqrt(2), **kwargs))
-        # TODO: does support for other shared layers here make sense.
-        pi_mlp = mlp_extractor(conv_to_fc(pi_conv), [dict(pi=net_arch[-1]["pi"])], act_fun)[0]
-        return pi_mlp, vf_mlp
-    elif shared or shared is None:
+    if shared or shared is None:
         name = "shared_c1" if shared is not None else "c1"  # Backwards Compatability
         conv_layer = act_fun(conv(obs, name, n_filters=n_filters, filter_size=(obs.shape[1], 1), stride=1, init_scale=np.sqrt(2), **kwargs))
         return mlp_extractor(conv_to_fc(conv_layer), net_arch, act_fun)
+
+    if select_idxs is not None:
+        pi_obs = obs[..., select_idxs["pi"], :]
+        vf_obs = obs[..., select_idxs["vf"], :]
     else:
-        pi_conv = act_fun(conv(obs, "pi_c1", n_filters=n_filters, filter_size=(obs.shape[1], 1), stride=1, init_scale=np.sqrt(2), **kwargs))
-        vf_conv = act_fun(conv(obs, "vf_c1", n_filters=n_filters, filter_size=(obs.shape[1], 1), stride=1, init_scale=np.sqrt(2), **kwargs))
+        pi_obs = obs
+        vf_obs = obs
+    if not conv_vf:
+        if len(obs.shape) == 4:
+            vf_obs = vf_obs[:, 0, :, 0]
+        vf_mlp = mlp_extractor(vf_obs, [dict(vf=net_arch[-1]["vf"])], act_fun)[1]
+        pi_conv = act_fun(conv(pi_obs, "pi_c1", n_filters=n_filters, filter_size=(obs.shape[1], 1), stride=1, init_scale=np.sqrt(2), **kwargs))
+        # TODO: does support for other shared layers here make sense.
+        pi_mlp = mlp_extractor(conv_to_fc(pi_conv), [dict(pi=net_arch[-1]["pi"])], act_fun)[0]
+        return pi_mlp, vf_mlp
+    else:
+        pi_conv = act_fun(conv(pi_obs, "pi_c1", n_filters=n_filters, filter_size=(obs.shape[1], 1), stride=1, init_scale=np.sqrt(2), **kwargs))
+        vf_conv = act_fun(conv(vf_obs, "vf_c1", n_filters=n_filters, filter_size=(obs.shape[1], 1), stride=1, init_scale=np.sqrt(2), **kwargs))
         # TODO: does support for other shared layers here make sense.
         pi_mlp = mlp_extractor(conv_to_fc(pi_conv), [dict(pi=net_arch[-1]["pi"])], act_fun)[0]
         vf_mlp = mlp_extractor(conv_to_fc(vf_conv), [dict(vf=net_arch[-1]["vf"])], act_fun)[1]
         return pi_mlp, vf_mlp
 
 
-def mlp_extractor(flat_observations, net_arch, act_fun):
+def mlp_extractor(flat_observations, net_arch, act_fun, select_idxs=None):
     """
     Constructs an MLP that receives observations as an input and outputs a latent representation for the policy and
     a value network. The ``net_arch`` parameter allows to specify the amount and size of the hidden layers and how many
@@ -102,8 +108,12 @@ def mlp_extractor(flat_observations, net_arch, act_fun):
             break  # From here on the network splits up in policy and value network
 
     # Build the non-shared part of the network
-    latent_policy = latent
-    latent_value = latent
+    if select_idxs is not None:
+        latent_policy = latent[select_idxs["pi"]]
+        latent_value = latent[select_idxs["vf"]]
+    else:
+        latent_policy = latent
+        latent_value = latent
     for idx, (pi_layer_size, vf_layer_size) in enumerate(zip_longest(policy_only_layers, value_only_layers)):
         if pi_layer_size is not None:
             assert isinstance(pi_layer_size, int), "Error: net_arch[-1]['pi'] must only contain integers."
