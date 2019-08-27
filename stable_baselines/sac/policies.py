@@ -35,6 +35,25 @@ def gaussian_entropy(log_std):
     return tf.reduce_sum(log_std + 0.5 * np.log(2.0 * np.pi * np.e), axis=-1)
 
 
+def mlp(input_ph, layers, activ_fn=tf.nn.relu, layer_norm=False, input_indices=None):
+    """
+    Create a multi-layer fully connected neural network.
+
+    :param input_ph: (tf.placeholder)
+    :param layers: ([int]) Network architecture
+    :param activ_fn: (tf.function) Activation function
+    :param layer_norm: (bool) Whether to apply layer normalization or not
+    :return: (tf.Tensor)
+    """
+    output = input_ph
+    for i, layer_size in enumerate(layers):
+        output = tf.layers.dense(output, layer_size, name='fc' + str(i))
+        if layer_norm:
+            output = tf.contrib.layers.layer_norm(output, center=True, scale=True)
+        output = activ_fn(output)
+    return output
+
+
 def clip_but_pass_gradient(input_, lower=-1., upper=1.):
     clip_up = tf.cast(input_ > upper, tf.float32)
     clip_low = tf.cast(input_ < lower, tf.float32)
@@ -162,7 +181,7 @@ class FeedForwardPolicy(SACPolicy):
 
     def __init__(self, sess, ob_space, ac_space, n_env=1, n_steps=1, n_batch=None, reuse=False, layers=None,
                  cnn_extractor=nature_cnn, feature_extraction="cnn", reg_weight=0.0,
-                 layer_norm=False, act_fun=tf.nn.relu, **kwargs):
+                 layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
         super(FeedForwardPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch,
                                                 reuse=reuse, scale=(feature_extraction == "cnn"))
 
@@ -178,6 +197,7 @@ class FeedForwardPolicy(SACPolicy):
         self.reg_loss = None
         self.reg_weight = reg_weight
         self.entropy = None
+        self.obs_module_indices = obs_module_indices
 
         assert len(layers) >= 1, "Error: must have at least one hidden layer for the policy."
 
@@ -186,6 +206,9 @@ class FeedForwardPolicy(SACPolicy):
     def make_actor(self, obs=None, reuse=False, scope="pi"):
         if obs is None:
             obs = self.processed_obs
+
+        if self.obs_module_indices is not None:
+            obs = tf.gather(obs, self.obs_module_indices["pi"], axis=-2)
 
         with tf.variable_scope(scope, reuse=reuse):
             if self.feature_extraction == "cnn":
@@ -228,6 +251,9 @@ class FeedForwardPolicy(SACPolicy):
                      create_vf=True, create_qf=True):
         if obs is None:
             obs = self.processed_obs
+
+        if self.obs_module_indices is not None:
+            obs = tf.gather(obs, self.obs_module_indices["vf"], axis=-2)
 
         with tf.variable_scope(scope, reuse=reuse):
             if self.feature_extraction == "cnn":
