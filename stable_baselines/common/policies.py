@@ -30,7 +30,7 @@ def nature_cnn(scaled_images, **kwargs):
     return activ(linear(layer_3, 'fc1', n_hidden=512, init_scale=np.sqrt(2)))
 
 
-def cnn_mlp_extractor(obs, net_arch, act_fun, select_idxs=None, **kwargs):
+def cnn_mlp_extractor(obs, net_arch, act_fun, obs_module_indices=None, **kwargs):
     n_filters = kwargs.pop("c1_n_filters", 3)
     h, w = tf.shape(obs)
     obs = tf.expand_dims(obs, -1)
@@ -41,9 +41,9 @@ def cnn_mlp_extractor(obs, net_arch, act_fun, select_idxs=None, **kwargs):
         conv_layer = act_fun(conv(obs, name, n_filters=n_filters, filter_size=(obs.shape[1], 1), stride=1, init_scale=np.sqrt(2), **kwargs))
         return mlp_extractor(conv_to_fc(conv_layer), net_arch, act_fun)
 
-    if select_idxs is not None:
-        pi_obs = obs[..., select_idxs["pi"], :]
-        vf_obs = obs[..., select_idxs["vf"], :]
+    if obs_module_indices is not None:
+        pi_obs = tf.gather(obs, indices=obs_module_indices["pi"], axis=-2)
+        vf_obs = tf.gather(obs, indices=obs_module_indices["vf"], axis=-2)
     else:
         pi_obs = obs
         vf_obs = obs
@@ -64,7 +64,7 @@ def cnn_mlp_extractor(obs, net_arch, act_fun, select_idxs=None, **kwargs):
         return pi_mlp, vf_mlp
 
 
-def mlp_extractor(flat_observations, net_arch, act_fun, select_idxs=None):
+def mlp_extractor(flat_observations, net_arch, act_fun, obs_module_indices=None):
     """
     Constructs an MLP that receives observations as an input and outputs a latent representation for the policy and
     a value network. The ``net_arch`` parameter allows to specify the amount and size of the hidden layers and how many
@@ -110,9 +110,9 @@ def mlp_extractor(flat_observations, net_arch, act_fun, select_idxs=None):
             break  # From here on the network splits up in policy and value network
 
     # Build the non-shared part of the network
-    if select_idxs is not None:
-        latent_policy = latent[select_idxs["pi"]]
-        latent_value = latent[select_idxs["vf"]]
+    if obs_module_indices is not None:
+        latent_policy = latent[obs_module_indices["pi"]]
+        latent_value = latent[obs_module_indices["vf"]]
     else:
         latent_policy = latent
         latent_value = latent
