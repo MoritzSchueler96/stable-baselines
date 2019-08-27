@@ -20,9 +20,11 @@ def _worker(remote, parent_remote, env_fn_wrapper):
                 if not done_not_reset:
                     observation, reward, done, info = env.step(data)
                     if done and getattr(env, "training", True):
+                        info['terminal_observation'] = observation
                         done_not_reset = False
                         observation = env.reset()
                     elif done:
+                        info['terminal_observation'] = observation
                         done_not_reset = True
                         last_step_data = (observation, reward, done, info)
                     remote.send((observation, reward, done, info))
