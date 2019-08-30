@@ -790,11 +790,12 @@ class OffPolicyRLModel(BaseRLModel):
     """
 
     def __init__(self, policy, env, replay_buffer=None, _init_setup_model=False, verbose=0, *,
-                 requires_vec_env=False, policy_base=None, policy_kwargs=None):
+                 requires_vec_env=False, policy_base=None, policy_kwargs=None, write_freq=1):
         super(OffPolicyRLModel, self).__init__(policy, env, verbose=verbose, requires_vec_env=requires_vec_env,
                                                policy_base=policy_base, policy_kwargs=policy_kwargs)
 
         self.replay_buffer = replay_buffer
+        self.write_freq = write_freq
 
     @abstractmethod
     def setup_model(self):
