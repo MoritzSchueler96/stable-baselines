@@ -261,7 +261,7 @@ class TD3(OffPolicyRLModel):
 
         # Do one gradient step
         # and optionally compute log for tensorboard
-        if writer is not None:
+        if writer is not None and self.num_timesteps % self.write_freq == 0:
             out = self.sess.run([self.summary] + step_ops, feed_dict)
             summary = out.pop(0)
             writer.add_summary(summary, step)

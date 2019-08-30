@@ -565,7 +565,7 @@ def q_explained_variance(q_pred, q_true):
     return 1.0 - (var_pred / var_y)
 
 
-def total_episode_reward_logger(rew_acc, rewards, masks, writer, steps):
+def total_episode_reward_logger(rew_acc, rewards, masks, writer, steps, write_freq=1):
     """
     calculates the cumulated episode reward, and prints to tensorflow log the output
 
@@ -577,6 +577,7 @@ def total_episode_reward_logger(rew_acc, rewards, masks, writer, steps):
     :return: (np.array float) the updated total running reward
     :return: (np.array float) the updated total running reward
     """
+    # TODO: find out how big this one is, thinking it is small
     with tf.variable_scope("environment_info", reuse=True):
         for env_idx in range(rewards.shape[0]):
             dones_idx = np.sort(np.argwhere(masks[env_idx]))
