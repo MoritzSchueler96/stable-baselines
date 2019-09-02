@@ -60,11 +60,11 @@ class TD3(OffPolicyRLModel):
                  learning_starts=100, train_freq=100, gradient_steps=100, batch_size=128,
                  tau=0.005, policy_delay=2, action_noise=None,
                  target_policy_noise=0.2, target_noise_clip=0.5,
-                 random_exploration=0.0, verbose=0, tensorboard_log=None,
+                 random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None,
                  full_tensorboard_log=False, seed=None, n_cpu_tf_sess=None):
 
-        super(TD3, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose,
+        super(TD3, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=TD3Policy, requires_vec_env=False, policy_kwargs=policy_kwargs,
                                   seed=seed, n_cpu_tf_sess=n_cpu_tf_sess)
 
@@ -261,7 +261,7 @@ class TD3(OffPolicyRLModel):
 
         # Do one gradient step
         # and optionally compute log for tensorboard
-        if writer is not None and self.num_timesteps % self.write_freq == 0:
+        if writer is not None:
             out = self.sess.run([self.summary] + step_ops, feed_dict)
             summary = out.pop(0)
             writer.add_summary(summary, step)
@@ -382,8 +382,9 @@ class TD3(OffPolicyRLModel):
                         # Update policy and critics (q functions)
                         # Note: the policy is updated less frequently than the Q functions
                         # this is controlled by the `policy_delay` parameter
+                        step_writer = writer if grad_step % self.write_freq == 0 else None
                         mb_infos_vals.append(
-                            self._train_step(step, writer, current_lr, (step + grad_step) % self.policy_delay == 0))
+                            self._train_step(step, step_writer, current_lr, (step + grad_step) % self.policy_delay == 0))
 
                     # Log losses and entropy, useful for monitor training
                     if len(mb_infos_vals) > 0:
