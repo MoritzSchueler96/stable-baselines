@@ -70,10 +70,10 @@ class SAC(OffPolicyRLModel):
                  learning_starts=100, train_freq=1, batch_size=64,
                  tau=0.005, ent_coef='auto', target_update_interval=1,
                  gradient_steps=1, target_entropy='auto', action_noise=None,
-                 random_exploration=0.0, verbose=0, tensorboard_log=None,
+                 random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False):
 
-        super(SAC, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose,
+        super(SAC, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=SACPolicy, requires_vec_env=False, policy_kwargs=policy_kwargs)
 
         self.buffer_size = buffer_size
@@ -448,7 +448,8 @@ class SAC(OffPolicyRLModel):
                         frac = 1.0 - step / total_timesteps
                         current_lr = self.learning_rate(frac)
                         # Update policy and critics (q functions)
-                        mb_infos_vals.append(self._train_step(step, writer, current_lr))
+                        step_writer = writer if grad_step % self.write_freq == 0 else None
+                        mb_infos_vals.append(self._train_step(step, step_writer, current_lr))
                         # Update target network
                         if (step + grad_step) % self.target_update_interval == 0:
                             # Update target network
