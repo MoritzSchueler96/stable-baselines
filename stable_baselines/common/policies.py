@@ -582,7 +582,7 @@ class FeedForwardPolicy(ActorCriticPolicy):
         super(FeedForwardPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=reuse,
                                                 scale=(feature_extraction == "cnn"), box_dist_type=box_dist_type)
 
-        self._kwargs_check(feature_extraction, kwargs)
+        #self._kwargs_check(feature_extraction, kwargs)
 
         if layers is not None:
             warnings.warn("Usage of the `layers` parameter is deprecated! Use net_arch instead "
