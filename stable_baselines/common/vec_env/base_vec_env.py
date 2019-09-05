@@ -243,8 +243,8 @@ class VecEnvWrapper(VecEnv):
     def close(self):
         return self.venv.close()
 
-    def render(self, *args, **kwargs):
-        return self.venv.render(*args, **kwargs)
+    def render(self, indices=None, *args, **kwargs):
+        return self.venv.render(indices, *args, **kwargs)
 
     def get_images(self):
         return self.venv.get_images()

@@ -43,7 +43,8 @@ class DummyVecEnv(VecEnv):
             if self.buf_dones[env_idx]:
                 # save final observation where user can get it, then reset
                 self.buf_infos[env_idx]['terminal_observation'] = obs
-                obs = self.envs[env_idx].reset()
+                if getattr(self.envs[env_idx], "training", True):
+                    obs = self.envs[env_idx].reset()
             self._save_obs(env_idx, obs)
         return (self._obs_from_buf(), np.copy(self.buf_rews), np.copy(self.buf_dones),
                 self.buf_infos.copy())
@@ -56,7 +57,7 @@ class DummyVecEnv(VecEnv):
 
     def reset(self, indices=None, *args, **kwargs):
         for env_idx in self._get_indices(indices):
-            obs = self.envs[env_idx].reset()
+            obs = self.envs[env_idx].reset(*args, **kwargs)
             self._save_obs(env_idx, obs)
         return self._obs_from_buf()
 
@@ -67,7 +68,7 @@ class DummyVecEnv(VecEnv):
     def get_images(self, *args, **kwargs) -> Sequence[np.ndarray]:
         return [env.render(*args, mode='rgb_array', **kwargs) for env in self.envs]
 
-    def render(self, indices, *args, **kwargs):
+    def render(self, indices=None, *args, **kwargs):
         envs = self._get_target_envs(indices)
         if len(envs) == 1:
             return envs[0].render(*args, **kwargs)
