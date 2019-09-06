@@ -121,7 +121,7 @@ class FeedForwardPolicy(TD3Policy):
             obs = self.processed_obs
 
         if self.obs_module_indices is not None:
-            obs = tf.gather(obs, self.obs_module_indices["pi"], axis=-2)
+            obs = tf.gather(obs, self.obs_module_indices["pi"], axis=1)
 
         with tf.variable_scope(scope, reuse=reuse):
             if self.feature_extraction == "cnn":
@@ -140,7 +140,7 @@ class FeedForwardPolicy(TD3Policy):
             obs = self.processed_obs
 
         if self.obs_module_indices is not None:
-            obs = tf.gather(obs, self.obs_module_indices["vf"], axis=-2)
+            obs = tf.gather(obs, self.obs_module_indices["vf"], axis=1)
 
         with tf.variable_scope(scope, reuse=reuse):
             if self.feature_extraction == "cnn":

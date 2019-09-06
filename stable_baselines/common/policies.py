@@ -109,8 +109,8 @@ def mlp_extractor(flat_observations, net_arch, act_fun, obs_module_indices=None)
 
     # Build the non-shared part of the network
     if obs_module_indices is not None:
-        latent_policy = latent[obs_module_indices["pi"]]
-        latent_value = latent[obs_module_indices["vf"]]
+        latent_policy = tf.gather(latent, obs_module_indices["pi"], axis=1)
+        latent_value = tf.gather(latent, obs_module_indices["vf"], axis=1)
     else:
         latent_policy = latent
         latent_value = latent
