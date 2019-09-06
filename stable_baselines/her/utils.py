@@ -92,8 +92,8 @@ class HERGoalEnvWrapper(object):
     def seed(self, seed=None):
         return self.env.seed(seed)
 
-    def reset(self):
-        return self.convert_dict_to_obs(self.env.reset())
+    def reset(self, *args, **kwargs):
+        return self.convert_dict_to_obs(self.env.reset(*args, **kwargs))
 
     def compute_reward(self, achieved_goal, desired_goal, info):
         return self.env.compute_reward(achieved_goal, desired_goal, info)

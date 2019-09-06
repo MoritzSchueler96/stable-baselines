@@ -15,6 +15,7 @@ from stable_baselines.ppo2.ppo2 import safe_mean, get_schedule_fn
 from stable_baselines.sac.sac import get_vars
 from stable_baselines.td3.policies import TD3Policy
 from stable_baselines import logger
+from gym_fixed_wing.fixed_wing import FixedWingAircraft, FixedWingAircraftGoal
 
 
 class TD3(OffPolicyRLModel):
@@ -301,6 +302,7 @@ class TD3(OffPolicyRLModel):
             ep_info_buf = deque(maxlen=100)
             n_updates = 0
             infos_values = []
+            self.active_sampling = False
 
             for step in range(total_timesteps):
                 if callback is not None:
@@ -375,7 +377,20 @@ class TD3(OffPolicyRLModel):
                     if self.action_noise is not None:
                         self.action_noise.reset()
                     if not isinstance(self.env, VecEnv):
-                        obs = self.env.reset()
+                        if self.active_sampling:
+                            sampled_obs = []
+                            sampled_targets = []
+                            sampled_states = []
+                            env = self._get_env()
+                            for i in range(25):
+                                sampled_obs.append(self.env.reset())
+                                sampled_targets.append(env.target)
+                                sampled_states.append({state: var.value for state, var in env.simulator.state.items() if state not in ["attitude", "wind_n", "wind_e", "wind_d"]})
+                            obs_uncertainty = self._get_q_value_discrepancies(sampled_obs)
+                            chosen_i = np.argmax(obs_uncertainty)
+                            obs = self.env.reset(state=sampled_states[chosen_i], target=sampled_targets[chosen_i])
+                        else:
+                            obs = self.env.reset()
                     episode_rewards.append(0.0)
 
                     maybe_is_success = info.get('is_success')
@@ -439,6 +454,22 @@ class TD3(OffPolicyRLModel):
             actions = actions[0]
 
         return actions, None
+
+    def _get_q_value_discrepancies(self, inputs):
+        # TODO: handle single input
+        discrepancies = []
+        q1, q2 = self.sess.run([self.policy_tf.qf1, self.policy_tf.qf2], feed_dict={self.observations_ph: inputs})
+        for i in range(len(q1)):
+            discrepancies.append(np.square(q1[i]-q2[i]))
+
+        return discrepancies
+
+    def _get_env(self):
+        env = self.env
+        while not (isinstance(env, FixedWingAircraft) or isinstance(env, FixedWingAircraftGoal)):
+            env = env.env
+
+        return env
 
     def get_parameter_list(self):
         return (self.params +
