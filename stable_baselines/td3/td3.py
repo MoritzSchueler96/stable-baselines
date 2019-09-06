@@ -302,7 +302,7 @@ class TD3(OffPolicyRLModel):
             ep_info_buf = deque(maxlen=100)
             n_updates = 0
             infos_values = []
-            self.active_sampling = False
+            active_sampling = False
 
             for step in range(total_timesteps):
                 if callback is not None:
@@ -377,7 +377,7 @@ class TD3(OffPolicyRLModel):
                     if self.action_noise is not None:
                         self.action_noise.reset()
                     if not isinstance(self.env, VecEnv):
-                        if self.active_sampling:
+                        if active_sampling:
                             sampled_obs = []
                             sampled_targets = []
                             sampled_states = []
