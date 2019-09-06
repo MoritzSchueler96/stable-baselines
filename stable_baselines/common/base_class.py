@@ -1146,8 +1146,8 @@ class _UnvecWrapper(VecEnvWrapper):
         del obs
         return obs_
 
-    def reset(self):
-        return self.unvec_obs(self.venv.reset())
+    def reset(self, *args, **kwargs):
+        return self.unvec_obs(self.venv.reset(*args, **kwargs))
 
     def step_async(self, actions):
         self.venv.step_async([actions])
