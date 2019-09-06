@@ -305,7 +305,7 @@ class TD3(OffPolicyRLModel):
                 obs_ = self._vec_normalize_env.get_original_obs().squeeze()
             n_updates = 0
             infos_values = []
-            self.active_sampling = False
+            active_sampling = False
 
             callback.on_training_start(locals(), globals())
             callback.on_rollout_start()
@@ -401,7 +401,7 @@ class TD3(OffPolicyRLModel):
                     if self.action_noise is not None:
                         self.action_noise.reset()
                     if not isinstance(self.env, VecEnv):
-                        if self.active_sampling:
+                        if active_sampling:
                             sampled_obs = []
                             sampled_targets = []
                             sampled_states = []
