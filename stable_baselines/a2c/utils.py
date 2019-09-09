@@ -565,7 +565,7 @@ def q_explained_variance(q_pred, q_true):
     return 1.0 - (var_pred / var_y)
 
 
-def total_episode_reward_logger(rew_acc, rewards, masks, writer, steps, write_freq=1):
+def total_episode_reward_logger(rew_acc, rewards, masks, writer, steps):
     """
     calculates the cumulated episode reward, and prints to tensorflow log the output
 
