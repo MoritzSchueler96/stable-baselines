@@ -1,9 +1,8 @@
 import tensorflow as tf
 import numpy as np
 from gym.spaces import Box
-
-from stable_baselines.common.policies import BasePolicy, nature_cnn, register_policy
 from stable_baselines.common.tf_layers import mlp
+from stable_baselines.common.policies import BasePolicy, nature_cnn, register_policy, cnn_1d_extractor
 
 EPS = 1e-6  # Avoid NaN (prevents division by zero or log of zero)
 # CAP the standard deviation of the actor
@@ -183,13 +182,15 @@ class FeedForwardPolicy(SACPolicy):
                  cnn_extractor=nature_cnn, feature_extraction="cnn", reg_weight=0.0,
                  layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
         super(FeedForwardPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch,
-                                                reuse=reuse, scale=(feature_extraction == "cnn"))
+                                                reuse=reuse,
+                                                scale=(feature_extraction == "cnn" and cnn_extractor == nature_cnn))
 
         self._kwargs_check(feature_extraction, kwargs)
         self.layer_norm = layer_norm
         self.feature_extraction = feature_extraction
         self.cnn_kwargs = kwargs
         self.cnn_extractor = cnn_extractor
+        self.cnn_vf = self.cnn_kwargs.pop("cnn_vf", True)
         self.reuse = reuse
         if layers is None:
             layers = [64, 64]
@@ -208,11 +209,11 @@ class FeedForwardPolicy(SACPolicy):
             obs = self.processed_obs
 
         if self.obs_module_indices is not None:
-            obs = tf.gather(obs, self.obs_module_indices["pi"], axis=1)
+            obs = tf.gather(obs, self.obs_module_indices["pi"], axis=-1)
 
         with tf.variable_scope(scope, reuse=reuse):
             if self.feature_extraction == "cnn":
-                pi_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+                pi_h = self.cnn_extractor(obs, name="pi_c1", act_fun=self.activ_fn, **self.cnn_kwargs)
             else:
                 pi_h = tf.layers.flatten(obs)
 
@@ -253,11 +254,11 @@ class FeedForwardPolicy(SACPolicy):
             obs = self.processed_obs
 
         if self.obs_module_indices is not None:
-            obs = tf.gather(obs, self.obs_module_indices["vf"], axis=1)
+            obs = tf.gather(obs, self.obs_module_indices["vf"], axis=-1)
 
         with tf.variable_scope(scope, reuse=reuse):
-            if self.feature_extraction == "cnn":
-                critics_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+            if self.feature_extraction == "cnn" and self.cnn_vf:
+                critics_h = self.cnn_extractor(obs, name="vf_c1", act_fun=self.activ_fn, **self.cnn_kwargs)
             else:
                 critics_h = tf.layers.flatten(obs)
 
@@ -312,6 +313,25 @@ class CnnPolicy(FeedForwardPolicy):
     def __init__(self, sess, ob_space, ac_space, n_env=1, n_steps=1, n_batch=None, reuse=False, **_kwargs):
         super(CnnPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse,
                                         feature_extraction="cnn", **_kwargs)
+
+
+class CnnMlpPolicy(FeedForwardPolicy):
+    """
+    Policy object that implements actor critic, using a CNN as the first layer, followed by an MLP.
+
+    :param sess: (TensorFlow session) The current TensorFlow session
+    :param ob_space: (Gym Space) The observation space of the environment
+    :param ac_space: (Gym Space) The action space of the environment
+    :param n_env: (int) The number of environments to run
+    :param n_steps: (int) The number of steps to run for each environment
+    :param n_batch: (int) The number of batch to run (n_envs * n_steps)
+    :param reuse: (bool) If the policy is reusable or not
+    :param _kwargs: (dict) Extra keyword arguments for the nature CNN feature extraction
+    """
+
+    def __init__(self, sess, ob_space, ac_space, n_env=1, n_steps=1, n_batch=None, reuse=False, **_kwargs):
+        super(CnnMlpPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse,
+                                           cnn_extractor=cnn_1d_extractor, feature_extraction="cnn", **_kwargs)
 
 
 class LnCnnPolicy(FeedForwardPolicy):
@@ -375,3 +395,4 @@ register_policy("CnnPolicy", CnnPolicy)
 register_policy("LnCnnPolicy", LnCnnPolicy)
 register_policy("MlpPolicy", MlpPolicy)
 register_policy("LnMlpPolicy", LnMlpPolicy)
+register_policy("CnnMlpPolicy", CnnMlpPolicy)
