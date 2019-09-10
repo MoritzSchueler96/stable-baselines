@@ -35,38 +35,52 @@ def cnn_1d_extractor(obs, act_fun, name, **kwargs):
     return conv_to_fc(act_fun(conv(obs, name, filter_size=(obs.shape[1], 1), stride=1, init_scale=np.sqrt(2), **kwargs)))
 
 
-def cnn_mlp_extractor(obs, net_arch, act_fun, obs_module_indices=None, **kwargs):
+def cnn_mlp_extractor(obs, net_arch, act_fun, obs_module_indices=None, dual_critic=False, **kwargs):
     conv_vf = kwargs.pop("cnn_vf", True)
     shared = kwargs.pop("cnn_shared", None)
     if shared or shared is None:
         name = "shared_c1" if shared is not None else "c1"  # Backwards Compatability
         conv_layer = cnn_1d_extractor(obs, act_fun, name, **kwargs)
-        return mlp_extractor(conv_layer, net_arch, act_fun)
-    if obs_module_indices is not None:
-        pi_obs = tf.gather(obs, indices=obs_module_indices["pi"], axis=-1)
-        vf_obs = tf.gather(obs, indices=obs_module_indices["vf"], axis=-1)
+        mlps = mlp_extractor(conv_layer, net_arch, act_fun, obs_module_indices, dual_critic=dual_critic)
+        if dual_critic:
+            pi_mlp, vf_mlp, vf_mlp_d = mlps
+        else:
+            pi_mlp, vf_mlp = mlps
     else:
-        pi_obs = obs
-        vf_obs = obs
-    if not conv_vf:
-        if len(obs.shape) == 3:
-            vf_obs = vf_obs[:, 0, :]
-        vf_mlp = mlp_extractor(vf_obs, [dict(vf=net_arch[-1]["vf"])], act_fun)[1]
-        pi_conv = cnn_1d_extractor(pi_obs, act_fun, "pi_c1", **kwargs)
-        # TODO: does support for other shared layers here make sense.
-        pi_mlp, _, activations = mlp_extractor(pi_conv, [dict(pi=net_arch[-1]["pi"])], act_fun)
-        activations.insert(0, pi_conv)
-        return pi_mlp, vf_mlp, activations
-    else:
-        pi_conv = cnn_1d_extractor(pi_obs, act_fun, "pi_c1", **kwargs)
-        vf_conv = cnn_1d_extractor(vf_obs, act_fun, "vf_c1", **kwargs)
-        # TODO: does support for other shared layers here make sense.
-        pi_mlp = mlp_extractor(pi_conv, [dict(pi=net_arch[-1]["pi"])], act_fun)[0]
-        vf_mlp = mlp_extractor(vf_conv, [dict(vf=net_arch[-1]["vf"])], act_fun)[1]
-        return pi_mlp, vf_mlp
+        if obs_module_indices is not None:
+            pi_obs = tf.gather(obs, indices=obs_module_indices["pi"], axis=-1)
+            vf_obs = tf.gather(obs, indices=obs_module_indices["vf"], axis=-1)
+        else:
+            pi_obs = obs
+            vf_obs = obs
+        if not conv_vf:
+            if len(obs.shape) == 3:
+                vf_obs = vf_obs[:, 0, :]
+            vf_mlps = mlp_extractor(vf_obs, [dict(vf=net_arch[-1]["vf"])], act_fun, dual_critic=dual_critic)
+            if dual_critic:
+                _, vf_mlp, vf_mlp_d = vf_mlps
+            else:
+                _, vf_mlp = vf_mlps
+            pi_conv = cnn_1d_extractor(pi_obs, act_fun, "pi_c1", **kwargs)
+            # TODO: does support for other shared layers here make sense.
+            pi_mlp = mlp_extractor(pi_conv, [dict(pi=net_arch[-1]["pi"])], act_fun, dual_critic=False)[0]
+        else:
+            pi_conv = cnn_1d_extractor(pi_obs, act_fun, "pi_c1", **kwargs)
+            vf_conv = cnn_1d_extractor(vf_obs, act_fun, "vf_c1", **kwargs)
+            # TODO: does support for other shared layers here make sense.
+            pi_mlp = mlp_extractor(pi_conv, [dict(pi=net_arch[-1]["pi"])], act_fun, dual_critic=False)[0]
+            vf_mlps = mlp_extractor(vf_conv, [dict(vf=net_arch[-1]["vf"])], act_fun, dual_critic=dual_critic)
+            if dual_critic:
+                _, vf_mlp, vf_mlp_d = vf_mlps
+            else:
+                _, vf_mlp = vf_mlps
+
+    if dual_critic:
+        return pi_mlp, vf_mlp, vf_mlp_d
+    return pi_mlp, vf_mlp
 
 
-def mlp_extractor(flat_observations, net_arch, act_fun, obs_module_indices=None):
+def mlp_extractor(flat_observations, net_arch, act_fun, obs_module_indices=None, dual_critic=False):
     """
     Constructs an MLP that receives observations as an input and outputs a latent representation for the policy and
     a value network. The ``net_arch`` parameter allows to specify the amount and size of the hidden layers and how many
@@ -94,7 +108,6 @@ def mlp_extractor(flat_observations, net_arch, act_fun, obs_module_indices=None)
     latent = flat_observations
     policy_only_layers = []  # Layer sizes of the network that only belongs to the policy network
     value_only_layers = []  # Layer sizes of the network that only belongs to the value network
-    activations = []
 
     # Iterate through the shared layers and build the shared parts of the network
     for idx, layer in enumerate(net_arch):
@@ -119,17 +132,24 @@ def mlp_extractor(flat_observations, net_arch, act_fun, obs_module_indices=None)
     else:
         latent_policy = latent
         latent_value = latent
+
+    if dual_critic:
+        latent_value_d = latent
+
     for idx, (pi_layer_size, vf_layer_size) in enumerate(zip_longest(policy_only_layers, value_only_layers)):
         if pi_layer_size is not None:
             assert isinstance(pi_layer_size, int), "Error: net_arch[-1]['pi'] must only contain integers."
-            latent_policy = act_fun(linear(latent_policy, "pi_fc{}".format(idx), pi_layer_size, init_scale=np.sqrt(2)))
-            activations.append(latent_policy)
+            latent_policy = act_fun(linear(latent_policy, "pi_fc{}".format(idx), pi_layer_size, init_scale=np.sqrt(2)), name="pi_fc{}_tanh")
 
         if vf_layer_size is not None:
             assert isinstance(vf_layer_size, int), "Error: net_arch[-1]['vf'] must only contain integers."
-            latent_value = act_fun(linear(latent_value, "vf_fc{}".format(idx), vf_layer_size, init_scale=np.sqrt(2)))
+            latent_value = act_fun(linear(latent_value, "vf_fc{}".format(idx), vf_layer_size, init_scale=np.sqrt(2)), name="vf_fc{}_tanh")
+            if dual_critic:
+                latent_value_d = act_fun(linear(latent_value, "vf_d_fc{}".format(idx), vf_layer_size, init_scale=np.sqrt(2)), name="vf_d_fc{}_tanh")
 
-    return latent_policy, latent_value, activations
+    if dual_critic:
+        return latent_policy, latent_value, latent_value_d
+    return latent_policy, latent_value
 
 
 class BasePolicy(ABC):
@@ -267,6 +287,7 @@ class ActorCriticPolicy(BasePolicy):
         self._policy = None
         self._proba_distribution = None
         self._value_fn = None
+        self._value_fn_d = None
         self._action = None
         self._deterministic_action = None
 
@@ -292,7 +313,7 @@ class ActorCriticPolicy(BasePolicy):
                                      for categorical in self.proba_distribution.categoricals]
             else:
                 self._policy_proba = []  # it will return nothing, as it is not implemented
-            self._value_flat = self.value_fn[:, 0]
+            self._value_flat = tf.minimum(self.value_fn[:, 0], self.value_fn_d[:, 0])
 
     @property
     def pdtype(self):
@@ -313,6 +334,11 @@ class ActorCriticPolicy(BasePolicy):
     def value_fn(self):
         """tf.Tensor: value estimate, of shape (self.n_batch, 1)"""
         return self._value_fn
+
+    @property
+    def value_fn_d(self):
+        """tf.Tensor: value estimate, of shape (self.n_batch, 1)"""
+        return self._value_fn_d
 
     @property
     def value_flat(self):
@@ -606,16 +632,16 @@ class FeedForwardPolicy(ActorCriticPolicy):
             if feature_extraction == "cnn":
                 pi_latent = vf_latent = cnn_extractor(self.processed_obs, **kwargs)
             elif feature_extraction == "cnn_mlp":
-                pi_latent, vf_latent, activations = cnn_mlp_extractor(self.processed_obs, net_arch, act_fun, **kwargs)
+                pi_latent, vf_latent, vf_latent_d = cnn_mlp_extractor(self.processed_obs, net_arch, act_fun, dual_critic=True, **kwargs)
             else:
-                pi_latent, vf_latent, activations = mlp_extractor(tf.layers.flatten(self.processed_obs), net_arch, act_fun, **kwargs)
+                pi_latent, vf_latent, vf_latent_d = mlp_extractor(tf.layers.flatten(self.processed_obs), net_arch, act_fun, dual_critic=True, **kwargs)
 
             self._value_fn = linear(vf_latent, 'vf', 1)
+            self._value_fn_d = linear(vf_latent_d, "vf_d", 1)
 
+            # TODO: maybe take minimum here
             self._proba_distribution, self._policy, self.q_value = \
                 self.pdtype.proba_distribution_from_latent(pi_latent, vf_latent, init_scale=0.01)
-
-            self.activations = activations
 
         self._setup_init()
 

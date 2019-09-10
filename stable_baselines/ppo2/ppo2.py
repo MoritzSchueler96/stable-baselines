@@ -175,9 +175,8 @@ class PPO2(ActorCriticRLModel):
                         # Clip the different between old and new value
                         # NOTE: this depends on the reward scaling
                         vpred_clipped = self.old_vpred_ph + \
-                            tf.clip_by_value(train_model.value_flat - self.old_vpred_ph,
+                            tf.clip_by_value(vpred - self.old_vpred_ph,
                                              - self.clip_range_vf_ph, self.clip_range_vf_ph)
-
 
                     vf_losses1 = tf.square(vpred - self.rewards_ph)
                     vf_losses2 = tf.square(vpred_clipped - self.rewards_ph)
@@ -312,6 +311,8 @@ class PPO2(ActorCriticRLModel):
         self.cliprange = get_schedule_fn(self.cliprange)
         cliprange_vf = get_schedule_fn(self.cliprange_vf)
 
+        active_sampling = False
+
         new_tb_log = self._init_num_timesteps(reset_num_timesteps)
 
         with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
@@ -395,6 +396,7 @@ class PPO2(ActorCriticRLModel):
                     for (loss_val, loss_name) in zip(loss_vals, self.loss_names):
                         logger.logkv(loss_name, loss_val)
                     logger.dumpkvs()
+
 
                 if callback is not None:
                     # Only stop training if return value is False, not when it is None. This is for backwards

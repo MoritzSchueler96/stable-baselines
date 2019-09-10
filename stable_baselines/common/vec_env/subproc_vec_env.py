@@ -13,6 +13,7 @@ def _worker(remote, parent_remote, env_fn_wrapper):
     env = env_fn_wrapper.var()
     done_not_reset = False
     last_step_data = None
+    reset_data = []
     while True:
         try:
             cmd, data = remote.recv()
@@ -22,7 +23,11 @@ def _worker(remote, parent_remote, env_fn_wrapper):
                     if done and getattr(env, "training", True):
                         info['terminal_observation'] = observation
                         done_not_reset = False
-                        observation = env.reset()
+                        if len(reset_data) > 0:
+                            scenario = reset_data.pop()
+                            observation = env.reset(**scenario)
+                        else:
+                            observation = env.reset()
                     elif done:
                         info['terminal_observation'] = observation
                         done_not_reset = True
@@ -30,6 +35,8 @@ def _worker(remote, parent_remote, env_fn_wrapper):
                     remote.send((observation, reward, done, info))
                 else:
                     remote.send(last_step_data)
+            elif cmd == "add_reset_data":
+                reset_data.append(data[0])
             elif cmd == 'reset':
                 observation = env.reset(*data[0], **data[1])
                 done_not_reset = False
@@ -131,6 +138,14 @@ class SubprocVecEnv(VecEnv):
             remote.send(('reset', (args, {**kwargs_i})))
         obs = [remote.recv() for i, remote in enumerate(self._get_target_remotes(indices))]
         return _flatten_obs(obs, self.observation_space)
+
+    def add_reset_data(self, data, indices=None):
+        remotes = self._get_target_remotes(indices)
+        remote_data = np.array_split(data, self.num_envs)
+        for i, pipe in enumerate(remotes):
+            # gather images from subprocesses
+            # `mode` will be taken into account later
+            pipe.send(('add_reset_data', list(remote_data[i])))
 
     def close(self):
         if self.closed:
