@@ -186,6 +186,8 @@ class TD3(OffPolicyRLModel):
                     qf1_loss = tf.reduce_mean((q_backup - qf1) ** 2)
                     qf2_loss = tf.reduce_mean((q_backup - qf2) ** 2)
 
+                    q_discrepancy = tf.square(qf1 - qf2)
+
                     qvalues_losses = qf1_loss + qf2_loss
 
                     # Policy loss: maximise q value
@@ -223,13 +225,16 @@ class TD3(OffPolicyRLModel):
                     self.infos_names = ['qf1_loss', 'qf2_loss']
                     # All ops to call during one training step
                     self.step_ops = [qf1_loss, qf2_loss,
-                                     qf1, qf2, train_values_op]
+                                     qf1, qf2, train_values_op, q_discrepancy]
 
                     # Monitor losses and entropy in tensorboard
                     tf.summary.scalar('policy_loss', policy_loss)
                     tf.summary.scalar('qf1_loss', qf1_loss)
                     tf.summary.scalar('qf2_loss', qf2_loss)
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
+
+
+                self.replay_buffer = DiscrepancyReplayBuffer(self.buffer_size, scorer=self.policy_tf.get_q_discrepancy)#ReplayBuffer(self.buffer_size)
 
                 # Retrieve parameters that must be saved
                 self.params = tf_util.get_trainable_vars("model")
@@ -271,9 +276,10 @@ class TD3(OffPolicyRLModel):
             out = self.sess.run(step_ops, feed_dict)
 
         # Unpack to monitor losses
+        q_discrepancies = out.pop(-1)
         qf1_loss, qf2_loss, *_values = out
 
-        return qf1_loss, qf2_loss
+        return qf1_loss, qf2_loss, q_discrepancies
 
     def learn(self, total_timesteps, callback=None,
               log_interval=4, tb_log_name="TD3", reset_num_timesteps=True, replay_wrapper=None):
@@ -410,7 +416,7 @@ class TD3(OffPolicyRLModel):
                                 sampled_obs.append(self.env.reset())
                                 sampled_targets.append(env.target)
                                 sampled_states.append({state: var.value for state, var in env.simulator.state.items() if state not in ["attitude", "wind_n", "wind_e", "wind_d"]})
-                            obs_uncertainty = self._get_q_value_discrepancies(sampled_obs)
+                            obs_uncertainty = self.policy_tf.get_q_discrepancy(sampled_obs)
                             chosen_i = np.argmax(obs_uncertainty)
                             obs = self.env.reset(state=sampled_states[chosen_i], target=sampled_targets[chosen_i])
                         else:
@@ -480,19 +486,9 @@ class TD3(OffPolicyRLModel):
 
         return actions, None
 
-    def _get_q_value_discrepancies(self, inputs):
-        # TODO: handle single input
-        discrepancies = []
-        q1, q2 = self.sess.run([self.policy_tf.qf1, self.policy_tf.qf2], feed_dict={self.observations_ph: inputs})
-        for i in range(len(q1)):
-            discrepancies.append(np.square(q1[i]-q2[i]))
-
-        return discrepancies
-
     def _get_env(self):
         env = self.env
-        while not (isinstance(env, FixedWingAircraft) or isinstance(env, FixedWingAircraftGoal)):
-            env = env.env
+        env = env.env
 
         return env
 

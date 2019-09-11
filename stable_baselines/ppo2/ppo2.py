@@ -92,6 +92,8 @@ class PPO2(ActorCriticRLModel):
                          _init_setup_model=_init_setup_model, policy_kwargs=policy_kwargs,
                          seed=seed, n_cpu_tf_sess=n_cpu_tf_sess)
 
+        self.active_sampling = False
+
         if _init_setup_model:
             self.setup_model()
 
@@ -308,7 +310,7 @@ class PPO2(ActorCriticRLModel):
         self.cliprange = get_schedule_fn(self.cliprange)
         cliprange_vf = get_schedule_fn(self.cliprange_vf)
 
-        active_sampling = False
+        samples = deque(maxlen=5 * self.env.num_envs * 10)
 
         new_tb_log = self._init_num_timesteps(reset_num_timesteps)
         callback = self._init_callback(callback)
@@ -406,6 +408,25 @@ class PPO2(ActorCriticRLModel):
                     for (loss_val, loss_name) in zip(loss_vals, self.loss_names):
                         logger.logkv(loss_name, loss_val)
                     logger.dumpkvs()
+
+                if self.active_sampling:
+                    if len(samples) < samples.maxlen:
+                        samples.extendleft(self.env.get_reset_data())
+                    else:
+                        resets = np.count_nonzero(masks)
+                        if resets > 0:
+                            sample_obs = [s["obs"] for s in samples]
+                            scores = self.train_model.get_critic_discrepancy(sample_obs)
+                            samples = deque(
+                                [sample for _, sample in sorted(zip(scores, samples), key=lambda pair: pair[0])],
+                                maxlen=5 * self.env.num_envs * 10)
+                            scenarios = []
+                            for i in range(self.env.num_envs * resets):
+                                scenarios.append(samples.popleft()["initial_state"])
+
+                            self.env.add_scenarios(scenarios)
+
+                            samples.extendleft(self.env.get_reset_data())
             callback.on_training_end()
             return self
 

@@ -12,8 +12,10 @@ def _worker(remote, parent_remote, env_fn_wrapper):
     parent_remote.close()
     env = env_fn_wrapper.var()
     done_not_reset = False
-    last_step_data = None
     reset_data = []
+    scenarios_to_run = []
+    gather_reset_data = False
+    last_step_data = None
     while True:
         try:
             cmd, data = remote.recv()
@@ -21,9 +23,15 @@ def _worker(remote, parent_remote, env_fn_wrapper):
                 if not done_not_reset:
                     observation, reward, done, info = env.step(data)
                     if done and getattr(env, "training", True):
+                        if gather_reset_data:
+                            for i in range(5):
+                                r_data = {"obs": env.reset()}
+                                r_data["initial_state"] = env.get_initial_state()
+                                reset_data.append(r_data)
+                        info['terminal_observation'] = observation
                         done_not_reset = False
-                        if len(reset_data) > 0:
-                            scenario = reset_data.pop()
+                        if len(scenarios_to_run) > 0:
+                            scenario = scenarios_to_run.pop()
                             observation = env.reset(**scenario)
                         else:
                             observation = env.reset()
@@ -33,10 +41,16 @@ def _worker(remote, parent_remote, env_fn_wrapper):
                     remote.send((observation, reward, done, info))
                 else:
                     remote.send(last_step_data)
-            elif cmd == 'seed':
-                remote.send(env.seed(data))
-            elif cmd == "add_reset_data":
-                reset_data.append(data[0])
+            elif cmd == "add_scenarios":
+                if isinstance(data, list):
+                    scenarios_to_run.extend(data)
+                else:
+                    scenarios_to_run.append(data)
+            elif cmd == "get_reset_data":
+                remote.send(reset_data)
+                reset_data = []
+            elif cmd == "set_gather_reset_data":
+                gather_reset_data = data
             elif cmd == 'reset':
                 observation = env.reset(*data[0], **data[1])
                 done_not_reset = False
@@ -145,13 +159,25 @@ class SubprocVecEnv(VecEnv):
         obs = [remote.recv() for i, remote in enumerate(self._get_target_remotes(indices))]
         return _flatten_obs(obs, self.observation_space)
 
-    def add_reset_data(self, data, indices=None):
+    def add_scenarios(self, scenarios, indices=None):
         remotes = self._get_target_remotes(indices)
-        remote_data = np.array_split(data, self.num_envs)
+        remote_data = np.array_split(scenarios, self.num_envs)
         for i, pipe in enumerate(remotes):
-            # gather images from subprocesses
-            # `mode` will be taken into account later
-            pipe.send(('add_reset_data', list(remote_data[i])))
+            pipe.send(('add_scenarios', list(remote_data[i])))
+
+    def get_reset_data(self, indices=None):
+        reset_data = []
+        for pipe in self._get_target_remotes(indices):
+            pipe.send(('get_reset_data', None))
+
+        for pipe in self._get_target_remotes(indices):
+            reset_data.extend(pipe.recv())
+
+        return reset_data
+
+    def set_gather_reset_data(self, status, indices=None):
+        for pipe in self._get_target_remotes(indices):
+            pipe.send(('set_gather_reset_data', status))
 
     def close(self):
         if self.closed:

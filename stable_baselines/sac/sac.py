@@ -408,6 +408,8 @@ class SAC(OffPolicyRLModel):
 
                 assert action.shape == self.env.action_space.shape
 
+                self.sess.run([self.policy_tf.qf1, self.policy_tf.qf2], feed_dict={self.observations_ph: np.expand_dims(obs, axis=0),
+                                         self.actions_ph: np.expand_dims(action, axis=0)})
                 new_obs, reward, done, info = self.env.step(unscaled_action)
 
                 self.num_timesteps += 1
@@ -573,3 +575,9 @@ class SAC(OffPolicyRLModel):
         params_to_save = self.get_parameters()
 
         self._save_to_file(save_path, data=data, params=params_to_save, cloudpickle=cloudpickle)
+
+    def get_q_value_discrepancies(self, inputs):
+        if len(inputs.shape) == 1: # TODO: or matrix shape and len(shape) == 2
+            inputs = np.expand_dims(inputs, axis=0)
+
+        qf1, qf2 = self.sess.run([self.policy_tf.qf1, self.policy_tf.qf2], feed_dict={self.observations_ph: np.expand_dims(inputs, axis=0)})
