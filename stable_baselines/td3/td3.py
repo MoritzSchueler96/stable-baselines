@@ -11,9 +11,10 @@ from stable_baselines.common.vec_env import VecEnv
 from stable_baselines.common.math_util import safe_mean, unscale_action, scale_action
 from stable_baselines.common.schedules import get_schedule_fn
 from stable_baselines.common.buffers import ReplayBuffer
+from stable_baselines.deepq.replay_buffer import ReplayBuffer, DiscrepancyReplayBuffer
+
 from stable_baselines.td3.policies import TD3Policy
 from stable_baselines import logger
-from gym_fixed_wing.fixed_wing import FixedWingAircraft, FixedWingAircraftGoal
 
 
 class TD3(OffPolicyRLModel):
@@ -128,8 +129,6 @@ class TD3(OffPolicyRLModel):
             with self.graph.as_default():
                 self.set_random_seed(self.seed)
                 self.sess = tf_util.make_session(num_cpu=self.n_cpu_tf_sess, graph=self.graph)
-
-                self.replay_buffer = ReplayBuffer(self.buffer_size)
 
                 with tf.variable_scope("input", reuse=False):
                     # Create policy and target TF objects
