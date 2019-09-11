@@ -10,12 +10,11 @@ import tensorflow as tf
 from stable_baselines.a2c.utils import total_episode_reward_logger
 from stable_baselines.common import tf_util, OffPolicyRLModel, SetVerbosity, TensorboardWriter
 from stable_baselines.common.vec_env import VecEnv
-from stable_baselines.deepq.replay_buffer import ReplayBuffer
+from stable_baselines.deepq.replay_buffer import ReplayBuffer, DiscrepancyReplayBuffer
 from stable_baselines.ppo2.ppo2 import safe_mean, get_schedule_fn
 from stable_baselines.sac.sac import get_vars
 from stable_baselines.td3.policies import TD3Policy
 from stable_baselines import logger
-from gym_fixed_wing.fixed_wing import FixedWingAircraft, FixedWingAircraftGoal
 
 
 class TD3(OffPolicyRLModel):
@@ -127,8 +126,6 @@ class TD3(OffPolicyRLModel):
                 if sys.platform == 'darwin':
                     n_cpu //= 2
                 self.sess = tf_util.make_session(num_cpu=n_cpu, graph=self.graph)
-
-                self.replay_buffer = ReplayBuffer(self.buffer_size)
 
                 with tf.variable_scope("input", reuse=False):
                     # Create policy and target TF objects
