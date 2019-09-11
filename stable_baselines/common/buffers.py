@@ -275,6 +275,7 @@ class DiscrepancyReplayBuffer(ReplayBuffer):
         :param alpha: (float) how much prioritization is used (0 - no prioritization, 1 - full prioritization)
         """
         super(DiscrepancyReplayBuffer, self).__init__(size)
+        self.scores = []
         self.scorer = scorer
 
     def add(self, obs_t, action, reward, obs_tp1, done):
@@ -288,6 +289,12 @@ class DiscrepancyReplayBuffer(ReplayBuffer):
         :param done: (bool) is the episode done
         """
         idx = self._next_idx
+
+        if self._next_idx >= len(self._storage):
+            self.scores.append(self.scorer(np.expand_dims(obs_tp1, axis=0))[0][0])
+        else:
+            self.scores[idx] = self.scorer(np.expand_dims(obs_tp1, axis=0))[0][0]
+
         super().add(obs_t, action, reward, obs_tp1, done)
         self.storage[-1] += (self.scorer(np.expand_dims(obs_tp1, axis=0)),)
 
@@ -315,12 +322,12 @@ class DiscrepancyReplayBuffer(ReplayBuffer):
         if not self.can_sample(batch_size):
             return self._encode_sample(list(range(len(self))))
 
-        scores = [transition[-1] for transition in self.storage]
-        idxs = np.random.choice(np.arange(len(scores)), size=(batch_size,), p=scores, replace=False)
+        scores = np.array(self.scores)
+        idxs = np.random.choice(np.arange(len(scores)), size=(batch_size,), p=scores / np.sum(scores), replace=False)
 
         return self._encode_sample(idxs)
 
-    def update_priorities(self, idxes, priorities):
+    def update_priorities(self):
         """
         Update priorities of sampled transitions.
 
@@ -334,3 +341,4 @@ class DiscrepancyReplayBuffer(ReplayBuffer):
         scores = self.scorer([transition[0] for transition in self.storage])[:, 0]
         for i, transition in enumerate(self.storage):
             transition[-1] = scores[i]
+
