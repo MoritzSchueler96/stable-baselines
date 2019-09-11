@@ -139,13 +139,13 @@ def mlp_extractor(flat_observations, net_arch, act_fun, obs_module_indices=None,
     for idx, (pi_layer_size, vf_layer_size) in enumerate(zip_longest(policy_only_layers, value_only_layers)):
         if pi_layer_size is not None:
             assert isinstance(pi_layer_size, int), "Error: net_arch[-1]['pi'] must only contain integers."
-            latent_policy = act_fun(linear(latent_policy, "pi_fc{}".format(idx), pi_layer_size, init_scale=np.sqrt(2)), name="pi_fc{}_tanh")
+            latent_policy = act_fun(linear(latent_policy, "pi_fc{}".format(idx), pi_layer_size, init_scale=np.sqrt(2)), name="pi_fc{}_tanh".format(idx))
 
         if vf_layer_size is not None:
             assert isinstance(vf_layer_size, int), "Error: net_arch[-1]['vf'] must only contain integers."
-            latent_value = act_fun(linear(latent_value, "vf_fc{}".format(idx), vf_layer_size, init_scale=np.sqrt(2)), name="vf_fc{}_tanh")
+            latent_value = act_fun(linear(latent_value, "vf_fc{}".format(idx), vf_layer_size, init_scale=np.sqrt(2)), name="vf_fc{}_tanh".format(idx))
             if dual_critic:
-                latent_value_d = act_fun(linear(latent_value, "vf_d_fc{}".format(idx), vf_layer_size, init_scale=np.sqrt(2)), name="vf_d_fc{}_tanh")
+                latent_value_d = act_fun(linear(latent_value_d, "vf_d_fc{}".format(idx), vf_layer_size, init_scale=np.sqrt(2)), name="vf_d_fc{}_tanh".format(idx))
 
     if dual_critic:
         return latent_policy, latent_value, latent_value_d
@@ -290,6 +290,7 @@ class ActorCriticPolicy(BasePolicy):
         self._value_fn_d = None
         self._action = None
         self._deterministic_action = None
+        self.dual_critic = False
 
     def _setup_init(self):
         """
@@ -313,7 +314,11 @@ class ActorCriticPolicy(BasePolicy):
                                      for categorical in self.proba_distribution.categoricals]
             else:
                 self._policy_proba = []  # it will return nothing, as it is not implemented
-            self._value_flat = tf.minimum(self.value_fn[:, 0], self.value_fn_d[:, 0])
+            if self.dual_critic:
+                self._value_flat = tf.minimum(self.value_fn[:, 0], self.value_fn_d[:, 0])
+                self._critic_discrepancy = tf.square(self.value_fn[:, 0] - self.value_fn_d[:, 0])
+            else:
+                self._value_flat = self.value_fn[:, 0]
 
     @property
     def pdtype(self):
@@ -609,7 +614,7 @@ class FeedForwardPolicy(ActorCriticPolicy):
     """
 
     def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=False, layers=None, net_arch=None,
-                 act_fun=tf.tanh, cnn_extractor=nature_cnn, feature_extraction="cnn", **kwargs):
+                 act_fun=tf.tanh, cnn_extractor=nature_cnn, feature_extraction="cnn", dual_critic=False, **kwargs):
         box_dist_type = kwargs.pop("box_dist_type", "guassian")
         super(FeedForwardPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=reuse,
                                                 scale=(feature_extraction == "cnn"), box_dist_type=box_dist_type)
@@ -628,16 +633,25 @@ class FeedForwardPolicy(ActorCriticPolicy):
                 layers = [64, 64]
             net_arch = [dict(vf=layers, pi=layers)]
 
+        self.dual_critic = dual_critic
+
         with tf.variable_scope("model", reuse=reuse):
             if feature_extraction == "cnn":
                 pi_latent = vf_latent = cnn_extractor(self.processed_obs, **kwargs)
-            elif feature_extraction == "cnn_mlp":
-                pi_latent, vf_latent, vf_latent_d = cnn_mlp_extractor(self.processed_obs, net_arch, act_fun, dual_critic=True, **kwargs)
             else:
-                pi_latent, vf_latent, vf_latent_d = mlp_extractor(tf.layers.flatten(self.processed_obs), net_arch, act_fun, dual_critic=True, **kwargs)
+                if feature_extraction == "cnn_mlp":
+                    latents = cnn_mlp_extractor(self.processed_obs, net_arch, act_fun, dual_critic=dual_critic, **kwargs)
+                else:
+                    latents = mlp_extractor(tf.layers.flatten(self.processed_obs), net_arch, act_fun, dual_critic=dual_critic, **kwargs)
+
+                if self.dual_critic:
+                    pi_latent, vf_latent, vf_latent_d = latents
+                else:
+                    pi_latent, vf_latent = latents
 
             self._value_fn = linear(vf_latent, 'vf', 1)
-            self._value_fn_d = linear(vf_latent_d, "vf_d", 1)
+            if self.dual_critic:
+                self._value_fn_d = linear(vf_latent_d, "vf_d", 1)
 
             # TODO: maybe take minimum here
             self._proba_distribution, self._policy, self.q_value = \
@@ -659,6 +673,11 @@ class FeedForwardPolicy(ActorCriticPolicy):
 
     def value(self, obs, state=None, mask=None):
         return self.sess.run(self.value_flat, {self.obs_ph: obs})
+
+    def get_critic_discrepancy(self, obs):
+        assert self.dual_critic
+
+        return self.sess.run(self._critic_discrepancy, {self.obs_ph: obs})
 
 
 class CnnPolicy(FeedForwardPolicy):

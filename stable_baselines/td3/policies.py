@@ -27,6 +27,7 @@ class TD3Policy(BasePolicy):
 
         self.qf1 = None
         self.qf2 = None
+        self.q_discrepancy = None
         self.policy = None
 
     def make_actor(self, obs=None, reuse=False, scope="pi"):
@@ -164,11 +165,15 @@ class FeedForwardPolicy(TD3Policy):
 
             self.qf1 = qf1
             self.qf2 = qf2
+            self.q_discrepancy = tf.square(self.qf1 - self.qf2)
 
         return self.qf1, self.qf2
 
     def step(self, obs, state=None, mask=None):
         return self.sess.run(self.policy, {self.obs_ph: obs})
+
+    def get_q_discrepancy(self, obs):
+        return self.sess.run(self.q_discrepancy, {self.obs_ph: obs})
 
 
 class CnnPolicy(FeedForwardPolicy):
