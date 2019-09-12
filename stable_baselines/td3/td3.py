@@ -387,15 +387,9 @@ class TD3(OffPolicyRLModel):
                         self.action_noise.reset()
                     if not isinstance(self.env, VecEnv):
                         if active_sampling:
-                            sampled_obs = []
-                            sampled_targets = []
-                            env = self._get_env()
-                            for i in range(25):
-                                sampled_obs.append(self.env.reset())
-                            obs_uncertainty = self.policy_tf.get_q_discrepancy(sampled_obs)
-                            chosen_i = np.argmax(obs_uncertainty)
-                            init = sampled_obs[chosen_i]
-                            obs = self.env.reset(state={"central_joint": np.arccos(init[4]), "elbow_joint": init[7]}, target={"x": init[0], "y": init[1]})
+                            sample_obs, sample_states = self.env.get_random_initial_states(25)
+                            obs_uncertainty = self.policy_tf.get_q_discrepancy(sample_obs)
+                            obs = self.env.reset(**sample_states[np.argmax(obs_uncertainty)])
                         else:
                             obs = self.env.reset()
                     episode_rewards.append(0.0)
