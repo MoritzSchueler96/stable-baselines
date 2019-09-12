@@ -11,7 +11,6 @@ from stable_baselines.common.vec_env import VecEnv
 from stable_baselines.common.math_util import safe_mean, unscale_action, scale_action
 from stable_baselines.common.schedules import get_schedule_fn
 from stable_baselines.common.buffers import ReplayBuffer
-from stable_baselines.deepq.replay_buffer import ReplayBuffer, DiscrepancyReplayBuffer
 
 from stable_baselines.td3.policies import TD3Policy
 from stable_baselines import logger
@@ -233,7 +232,8 @@ class TD3(OffPolicyRLModel):
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
 
 
-                self.replay_buffer = DiscrepancyReplayBuffer(self.buffer_size, scorer=self.policy_tf.get_q_discrepancy)#ReplayBuffer(self.buffer_size)
+                self.replay_buffer = ReplayBuffer(self.buffer_size)
+                #self.replay_buffer = DiscrepancyReplayBuffer(self.buffer_size, scorer=self.policy_tf.get_q_discrepancy)
 
                 # Retrieve parameters that must be saved
                 self.params = tf_util.get_trainable_vars("model")
@@ -285,6 +285,7 @@ class TD3(OffPolicyRLModel):
 
         new_tb_log = self._init_num_timesteps(reset_num_timesteps)
         callback = self._init_callback(callback)
+        last_replay_update = 0
 
         if replay_wrapper is not None:
             self.replay_buffer = replay_wrapper(self.replay_buffer)
@@ -403,6 +404,9 @@ class TD3(OffPolicyRLModel):
 
                 episode_rewards[-1] += reward_
                 if done:
+                    if isinstance(self.replay_buffer, DiscrepancyReplayBuffer) and n_updates - last_replay_update >= 5000:
+                        self.replay_buffer.update_priorities()
+                        last_replay_update = n_updates
                     if self.action_noise is not None:
                         self.action_noise.reset()
                     if not isinstance(self.env, VecEnv):

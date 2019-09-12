@@ -277,6 +277,8 @@ class DiscrepancyReplayBuffer(ReplayBuffer):
         super(DiscrepancyReplayBuffer, self).__init__(size)
         self.scores = []
         self.scorer = scorer
+        self.min_score = None
+        self.max_score = None
 
     def add(self, obs_t, action, reward, obs_tp1, done):
         """
@@ -290,10 +292,15 @@ class DiscrepancyReplayBuffer(ReplayBuffer):
         """
         idx = self._next_idx
 
+        score = self.scorer(np.expand_dims(obs_tp1, axis=0))[0][0]
+        if self.min_score is None or score < self.min_score:
+            self.min_score = score
+        if self.max_score is None or score > self.max_score:
+            self.max_score = score
         if self._next_idx >= len(self._storage):
-            self.scores.append(self.scorer(np.expand_dims(obs_tp1, axis=0))[0][0])
+            self.scores.append(score)
         else:
-            self.scores[idx] = self.scorer(np.expand_dims(obs_tp1, axis=0))[0][0]
+            self.scores[idx] = score
 
         super().add(obs_t, action, reward, obs_tp1, done)
         self.storage[-1] += (self.scorer(np.expand_dims(obs_tp1, axis=0)),)
@@ -322,7 +329,7 @@ class DiscrepancyReplayBuffer(ReplayBuffer):
         if not self.can_sample(batch_size):
             return self._encode_sample(list(range(len(self))))
 
-        scores = np.array(self.scores)
+        scores = self._scale_scores(np.array(self.scores))
         idxs = np.random.choice(np.arange(len(scores)), size=(batch_size,), p=scores / np.sum(scores), replace=False)
 
         return self._encode_sample(idxs)
@@ -341,4 +348,7 @@ class DiscrepancyReplayBuffer(ReplayBuffer):
         scores = self.scorer([transition[0] for transition in self.storage])[:, 0]
         for i, transition in enumerate(self.storage):
             transition[-1] = scores[i]
+
+    def _scale_scores(self, vals):
+        return (vals - self.min_score) / (self.max_score - self.min_score) * (1 - 0.1) + 0.1
 
