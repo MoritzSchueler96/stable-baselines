@@ -388,15 +388,13 @@ class TD3(OffPolicyRLModel):
                         if active_sampling:
                             sampled_obs = []
                             sampled_targets = []
-                            sampled_states = []
                             env = self._get_env()
                             for i in range(25):
                                 sampled_obs.append(self.env.reset())
-                                sampled_targets.append(env.target)
-                                sampled_states.append({state: var.value for state, var in env.simulator.state.items() if state not in ["attitude", "wind_n", "wind_e", "wind_d"]})
                             obs_uncertainty = self.policy_tf.get_q_discrepancy(sampled_obs)
                             chosen_i = np.argmax(obs_uncertainty)
-                            obs = self.env.reset(state=sampled_states[chosen_i], target=sampled_targets[chosen_i])
+                            init = sampled_obs[chosen_i]
+                            obs = self.env.reset(state={"central_joint": np.arccos(init[4]), "elbow_joint": init[7]}, target={"x": init[0], "y": init[1]})
                         else:
                             obs = self.env.reset()
                     episode_rewards.append(0.0)
