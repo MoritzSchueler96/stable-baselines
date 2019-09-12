@@ -308,8 +308,9 @@ class TD3(OffPolicyRLModel):
             n_updates = 0
             infos_values = []
             active_sampling = False
+            initial_step = self.num_timesteps
 
-            for step in range(total_timesteps):
+            for step in range(initial_step, total_timesteps):
                 if callback is not None:
                     # Only stop training if return value is False, not when it is None. This is for backwards
                     # compatibility with callbacks that have no return statement.
