@@ -230,7 +230,8 @@ class TD3(OffPolicyRLModel):
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
 
 
-                self.replay_buffer = DiscrepancyReplayBuffer(self.buffer_size, scorer=self.policy_tf.get_q_discrepancy)#ReplayBuffer(self.buffer_size)
+                self.replay_buffer = ReplayBuffer(self.buffer_size)
+                #self.replay_buffer = DiscrepancyReplayBuffer(self.buffer_size, scorer=self.policy_tf.get_q_discrepancy)
 
                 # Retrieve parameters that must be saved
                 self.params = get_vars("model")
@@ -281,6 +282,7 @@ class TD3(OffPolicyRLModel):
               log_interval=4, tb_log_name="TD3", reset_num_timesteps=True, replay_wrapper=None):
 
         new_tb_log = self._init_num_timesteps(reset_num_timesteps)
+        last_replay_update = 0
 
         if replay_wrapper is not None:
             self.replay_buffer = replay_wrapper(self.replay_buffer)
@@ -377,6 +379,9 @@ class TD3(OffPolicyRLModel):
 
                 episode_rewards[-1] += reward
                 if done:
+                    if isinstance(self.replay_buffer, DiscrepancyReplayBuffer) and n_updates - last_replay_update >= 5000:
+                        self.replay_buffer.update_priorities()
+                        last_replay_update = n_updates
                     if self.action_noise is not None:
                         self.action_noise.reset()
                     if not isinstance(self.env, VecEnv):
