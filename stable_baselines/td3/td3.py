@@ -312,11 +312,12 @@ class TD3(OffPolicyRLModel):
             n_updates = 0
             infos_values = []
             active_sampling = False
+            initial_step = self.num_timesteps
 
             callback.on_training_start(locals(), globals())
             callback.on_rollout_start()
 
-            for step in range(total_timesteps):
+            for step in range(initial_step, total_timesteps):
                 # Before training starts, randomly sample actions
                 # from a uniform distribution for better exploration.
                 # Afterwards, use the learned policy
