@@ -189,7 +189,7 @@ class TD3(OffPolicyRLModel):
                     qvalues_losses = qf1_loss + qf2_loss
 
                     # Policy loss: maximise q value
-                    self.policy_loss = policy_loss = -tf.reduce_mean(qf1_pi)
+                    self.policy_loss = policy_loss = -tf.reduce_mean(qf1_pi) + 0.01 * tf.nn.l2_loss(self.policy_out)
 
                     # Policy train op
                     # will be called only every n training steps,
