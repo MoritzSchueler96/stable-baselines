@@ -113,6 +113,8 @@ class TD3(OffPolicyRLModel):
         self.policy_train_op = None
         self.policy_loss = None
 
+        self.active_sampling = False
+
         if _init_setup_model:
             self.setup_model()
 
@@ -311,7 +313,7 @@ class TD3(OffPolicyRLModel):
                 obs_ = self._vec_normalize_env.get_original_obs().squeeze()
             n_updates = 0
             infos_values = []
-            active_sampling = False
+            self.active_sampling = False
             initial_step = self.num_timesteps
 
             callback.on_training_start(locals(), globals())
@@ -411,10 +413,10 @@ class TD3(OffPolicyRLModel):
                     if self.action_noise is not None:
                         self.action_noise.reset()
                     if not isinstance(self.env, VecEnv):
-                        if active_sampling:
-                            sample_obs, sample_states = self.env.get_random_initial_states(25)
-                            obs_uncertainty = self.policy_tf.get_q_discrepancy(sample_obs)
-                            obs = self.env.reset(**sample_states[np.argmax(obs_uncertainty)])
+                        if self.active_sampling:
+                            sample_obs, sample_state = self.env.get_random_initial_states(25)
+                            obs_discrepancies = self.policy_tf.get_q_discrepancy(sample_obs)
+                            obs = self.env.reset(**sample_state[np.argmax(obs_discrepancies)])
                         else:
                             obs = self.env.reset()
                     episode_rewards.append(0.0)
