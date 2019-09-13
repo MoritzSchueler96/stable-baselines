@@ -10,7 +10,7 @@ import tensorflow as tf
 from stable_baselines.a2c.utils import total_episode_reward_logger
 from stable_baselines.common import tf_util, OffPolicyRLModel, SetVerbosity, TensorboardWriter
 from stable_baselines.common.vec_env import VecEnv
-from stable_baselines.deepq.replay_buffer import ReplayBuffer, DiscrepancyReplayBuffer
+from stable_baselines.deepq.replay_buffer import ReplayBuffer, DiscrepancyReplayBuffer, StableReplayBuffer
 from stable_baselines.ppo2.ppo2 import safe_mean, get_schedule_fn
 from stable_baselines.sac.sac import get_vars
 from stable_baselines.td3.policies import TD3Policy
@@ -232,7 +232,8 @@ class TD3(OffPolicyRLModel):
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
 
 
-                self.replay_buffer = ReplayBuffer(self.buffer_size)
+                #self.replay_buffer = ReplayBuffer(self.buffer_size)
+                self.replay_buffer = StableReplayBuffer(self.buffer_size)
                 #self.replay_buffer = DiscrepancyReplayBuffer(self.buffer_size, scorer=self.policy_tf.get_q_discrepancy)
 
                 # Retrieve parameters that must be saved
