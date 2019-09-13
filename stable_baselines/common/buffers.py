@@ -352,3 +352,83 @@ class DiscrepancyReplayBuffer(ReplayBuffer):
     def _scale_scores(self, vals):
         return (vals - self.min_score) / (self.max_score - self.min_score) * (1 - 0.1) + 0.1
 
+
+class StableReplayBuffer(ReplayBuffer):
+    def __init__(self, size):
+        """
+        Create Prioritized Replay buffer.
+
+        See Also ReplayBuffer.__init__
+
+        :param size: (int) Max number of transitions to store in the buffer. When the buffer overflows the old memories
+            are dropped.
+        :param alpha: (float) how much prioritization is used (0 - no prioritization, 1 - full prioritization)
+        """
+        super(StableReplayBuffer, self).__init__(size)
+        self.scores = []
+        self.lower_clip = None
+        self.upper_clip = None
+
+    def add(self, obs_t, action, reward, obs_tp1, done, score=None):
+        """
+        add a new transition to the buffer
+
+        :param obs_t: (Any) the last observation
+        :param action: ([float]) the action
+        :param reward: (float) the reward of the transition
+        :param obs_tp1: (Any) the current observation
+        :param done: (bool) is the episode done
+        """
+        idx = self._next_idx
+
+        if self._next_idx >= len(self._storage):
+            self.scores.append(score)
+        else:
+            self.scores[idx] = score
+
+        super().add(obs_t, action, reward, obs_tp1, done)
+
+    def sample(self, batch_size, **_kwargs):
+        """
+        Sample a batch of experiences.
+
+        compared to ReplayBuffer.sample
+        it also returns importance weights and idxes
+        of sampled experiences.
+
+        :param batch_size: (int) How many transitions to sample.
+        :param beta: (float) To what degree to use importance weights (0 - no corrections, 1 - full correction)
+        :return:
+            - obs_batch: (np.ndarray) batch of observations
+            - act_batch: (numpy float) batch of actions executed given obs_batch
+            - rew_batch: (numpy float) rewards received as results of executing act_batch
+            - next_obs_batch: (np.ndarray) next set of observations seen after executing act_batch
+            - done_mask: (numpy bool) done_mask[i] = 1 if executing act_batch[i] resulted in the end of an episode
+                and 0 otherwise.
+            - weights: (numpy float) Array of shape (batch_size,) and dtype np.float32 denoting importance weight of
+                each sampled transition
+            - idxes: (numpy int) Array of shape (batch_size,) and dtype np.int32 idexes in buffer of sampled experiences
+        """
+        if not self.can_sample(batch_size):
+            return self._encode_sample(list(range(len(self))))
+
+        scores = np.array(self.scores)
+        scores = np.clip(scores, np.percentile(scores, 10), np.percentile(scores, 90))
+        idxs = np.random.choice(np.arange(len(self.scores)), size=(batch_size,), p=scores / np.sum(scores), replace=False)
+
+        return self._encode_sample(idxs)
+
+    def update_priorities(self):
+        """
+        Update priorities of sampled transitions.
+
+        sets priority of transition at index idxes[i] in buffer
+        to priorities[i].
+
+        :param idxes: ([int]) List of idxes of sampled transitions
+        :param priorities: ([float]) List of updated priorities corresponding to transitions at the sampled idxes
+            denoted by variable `idxes`.
+        """
+        self.lower_clip = np.percentile(self.scores, 10)
+        self.upper_clip = np.percentile(self.scores, 90)
+

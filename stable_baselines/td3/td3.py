@@ -10,8 +10,7 @@ from stable_baselines.common import tf_util, OffPolicyRLModel, SetVerbosity, Ten
 from stable_baselines.common.vec_env import VecEnv
 from stable_baselines.common.math_util import safe_mean, unscale_action, scale_action
 from stable_baselines.common.schedules import get_schedule_fn
-from stable_baselines.common.buffers import ReplayBuffer
-
+from stable_baselines.common.buffers import ReplayBuffer, DiscrepancyReplayBuffer, StableReplayBuffer
 from stable_baselines.td3.policies import TD3Policy
 from stable_baselines import logger
 
@@ -234,7 +233,8 @@ class TD3(OffPolicyRLModel):
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
 
 
-                self.replay_buffer = ReplayBuffer(self.buffer_size)
+                #self.replay_buffer = ReplayBuffer(self.buffer_size)
+                self.replay_buffer = StableReplayBuffer(self.buffer_size)
                 #self.replay_buffer = DiscrepancyReplayBuffer(self.buffer_size, scorer=self.policy_tf.get_q_discrepancy)
 
                 # Retrieve parameters that must be saved
