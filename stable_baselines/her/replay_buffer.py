@@ -184,11 +184,10 @@ class HindsightExperienceReplayWrapper(object):
             # Add to the replay buffer
             if self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
                 self.replay_buffer.add(obs_t, action, reward, obs_tp1, done, tot_achieved_goal_changes)
+                if self.stable_indices.shape[0] == 0 or transition_idx >= self.stable_indices[-1]:
+                    continue
             else:
                 self.replay_buffer.add(obs_t, action, reward, obs_tp1, done)
-
-            if self.stable_indices.shape[0] == 0 or transition_idx >= self.stable_indices[-1]:
-                continue
 
             # We cannot sample a goal from the future in the last step of an episode
             if transition_idx == len(self.episode_transitions) - 1 and self.goal_selection_strategy == GoalSelectionStrategy.FUTURE:

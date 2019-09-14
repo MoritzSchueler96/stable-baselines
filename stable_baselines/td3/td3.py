@@ -56,7 +56,7 @@ class TD3(OffPolicyRLModel):
     """
 
     def __init__(self, policy, env, gamma=0.99, learning_rate=3e-4, buffer_size=50000,
-                 learning_starts=100, train_freq=100, gradient_steps=100, batch_size=128,
+                 buffer_type=ReplayBuffer, learning_starts=100, train_freq=100, gradient_steps=100, batch_size=128,
                  tau=0.005, policy_delay=2, action_noise=None,
                  target_policy_noise=0.2, target_noise_clip=0.5,
                  random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
@@ -65,6 +65,7 @@ class TD3(OffPolicyRLModel):
         super(TD3, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=TD3Policy, requires_vec_env=False, policy_kwargs=policy_kwargs)
 
+        self.buffer_type = buffer_type
         self.buffer_size = buffer_size
         self.learning_rate = learning_rate
         self.learning_starts = learning_starts
@@ -233,7 +234,7 @@ class TD3(OffPolicyRLModel):
 
 
                 #self.replay_buffer = ReplayBuffer(self.buffer_size)
-                self.replay_buffer = StableReplayBuffer(self.buffer_size)
+                self.replay_buffer = self.buffer_type(self.buffer_size)
                 #self.replay_buffer = DiscrepancyReplayBuffer(self.buffer_size, scorer=self.policy_tf.get_q_discrepancy)
 
                 # Retrieve parameters that must be saved
