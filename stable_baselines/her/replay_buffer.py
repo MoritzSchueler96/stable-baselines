@@ -64,6 +64,7 @@ class HindsightExperienceReplayWrapper(object):
         # Buffer for storing transitions of the current episode
         self.episode_transitions = []
         self.stable_indices = []
+        self.stable_max_change = np.array([5, 5, 5]) * self.env.env.simulator.dt
         self.legal_goal_low, self.legal_goal_high = self.env.env.get_goal_limits()
         self.replay_buffer = replay_buffer
 
@@ -171,7 +172,7 @@ class HindsightExperienceReplayWrapper(object):
             achieved_goal_changes = np.array(achieved_goal_changes)
             tot_achieved_goal_changes = np.sum(np.abs(achieved_goal_changes).flatten())
             achieved_goal_changes = np.abs(scipy.signal.fftconvolve(achieved_goal_changes, np.ones((5, achieved_goal_changes.shape[1]), dtype=int), 'valid', axes=0))
-            self.stable_indices = np.nonzero(np.all(achieved_goal_changes < [0.05, 0.05, 0.05], axis=1))[0] + 2
+            self.stable_indices = np.nonzero(np.all(achieved_goal_changes <= self.stable_max_change, axis=1))[0] + 2
             self.stable_indices = self.stable_indices[np.all(achieved_goals[self.stable_indices] >= self.legal_goal_low, axis=1) & np.all(achieved_goals[self.stable_indices] <= self.legal_goal_high, axis=1)]
 
             # TODO add support for choosing only goals in legal goals
