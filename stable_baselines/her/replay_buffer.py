@@ -4,6 +4,8 @@ import scipy.signal
 
 import numpy as np
 
+from stable_baselines.deepq.replay_buffer import StableReplayBuffer
+
 
 class GoalSelectionStrategy(Enum):
     """
@@ -63,9 +65,10 @@ class HindsightExperienceReplayWrapper(object):
         self.env = wrapped_env
         # Buffer for storing transitions of the current episode
         self.episode_transitions = []
-        self.stable_indices = []
-        self.stable_max_change = np.array([5, 5, 5]) * self.env.env.simulator.dt
-        self.legal_goal_low, self.legal_goal_high = self.env.env.get_goal_limits()
+        if self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
+            self.stable_indices = []
+            self.stable_max_change = np.array([0.025, 0.025, 0.025])#np.array([5, 5, 5]) * self.env.env.simulator.dt
+            #self.legal_goal_low, self.legal_goal_high = self.env.env.get_goal_limits()
         self.replay_buffer = replay_buffer
 
     def add(self, obs_t, action, reward, obs_tp1, done):
@@ -159,35 +162,41 @@ class HindsightExperienceReplayWrapper(object):
         """
         # For each transition in the last episode,
         # create a set of artificial transitions
-        if self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
+        if isinstance(self.replay_buffer, StableReplayBuffer) or self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
             achieved_goal_changes = []
             achieved_goals = []
             for transition_idx, transition in enumerate(self.episode_transitions):
                 obs_t, action, reward, obs_tp1, done = transition
                 obs_dict, next_obs_dict = map(self.env.convert_obs_to_dict, (obs_t, obs_tp1))
-                change = next_obs_dict["achieved_goal"] - obs_dict["achieved_goal"] - (next_obs_dict["desired_goal"] - obs_dict["desired_goal"])
+                if self.env.multi_dimensional_obs:
+                    change = next_obs_dict["achieved_goal"][0, :] - obs_dict["achieved_goal"][0, :] - (
+                            next_obs_dict["desired_goal"][0, :] - obs_dict["desired_goal"][0, :])
+                else:
+                    change = next_obs_dict["achieved_goal"] - obs_dict["achieved_goal"] - (
+                                next_obs_dict["desired_goal"] - obs_dict["desired_goal"])
                 achieved_goal_changes.append(change)
                 achieved_goals.append(obs_dict["achieved_goal"])
-            achieved_goals = np.array(achieved_goals)
-            achieved_goal_changes = np.array(achieved_goal_changes)
-            tot_achieved_goal_changes = np.sum(np.abs(achieved_goal_changes).flatten())
-            achieved_goal_changes = np.abs(scipy.signal.fftconvolve(achieved_goal_changes, np.ones((5, achieved_goal_changes.shape[1]), dtype=int), 'valid', axes=0))
-            self.stable_indices = np.nonzero(np.all(achieved_goal_changes <= self.stable_max_change, axis=1))[0] + 2
-            self.stable_indices = self.stable_indices[np.all(achieved_goals[self.stable_indices] >= self.legal_goal_low, axis=1) & np.all(achieved_goals[self.stable_indices] <= self.legal_goal_high, axis=1)]
-
-            # TODO add support for choosing only goals in legal goals
+            if self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
+                achieved_goals = np.array(achieved_goals)
+                achieved_goal_changes = np.array(achieved_goal_changes)
+                tot_achieved_goal_changes = np.sum(np.abs(achieved_goal_changes).flatten())
+                achieved_goal_changes = np.abs(scipy.signal.fftconvolve(achieved_goal_changes, np.ones((5, achieved_goal_changes.shape[1]), dtype=int), 'valid', axes=0))
+                self.stable_indices = np.nonzero(np.all(achieved_goal_changes <= self.stable_max_change, axis=1))[0] + 2
+                self.stable_indices = self.stable_indices[np.all((achieved_goals[self.stable_indices] - achieved_goals[0]) >= np.array([0.05, 0.05, 0]))]
+                #self.stable_indices = self.stable_indices[np.all(achieved_goals[self.stable_indices] >= self.legal_goal_low, axis=1) & np.all(achieved_goals[self.stable_indices] <= self.legal_goal_high, axis=1)]
 
         for transition_idx, transition in enumerate(self.episode_transitions):
 
             obs_t, action, reward, obs_tp1, done = transition
 
             # Add to the replay buffer
-            if self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
+            if isinstance(self.replay_buffer, StableReplayBuffer):
                 self.replay_buffer.add(obs_t, action, reward, obs_tp1, done, tot_achieved_goal_changes)
-                if self.stable_indices.shape[0] == 0 or transition_idx >= self.stable_indices[-1]:
-                    continue
             else:
                 self.replay_buffer.add(obs_t, action, reward, obs_tp1, done)
+
+            if self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE and (self.stable_indices.shape[0] == 0 or transition_idx >= self.stable_indices[-1]):
+                continue
 
             # We cannot sample a goal from the future in the last step of an episode
             if transition_idx == len(self.episode_transitions) - 1 and self.goal_selection_strategy == GoalSelectionStrategy.FUTURE:
@@ -220,7 +229,7 @@ class HindsightExperienceReplayWrapper(object):
                 obs, next_obs = map(self.env.convert_dict_to_obs, (obs_dict, next_obs_dict))
 
                 # Add artificial transition to the replay buffer
-                if self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
+                if isinstance(self.replay_buffer, StableReplayBuffer):
                     self.replay_buffer.add(obs, action, reward, next_obs, done, tot_achieved_goal_changes)
                 else:
                     self.replay_buffer.add(obs, action, reward, next_obs, done)
