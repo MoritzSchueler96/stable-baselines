@@ -59,7 +59,7 @@ class TD3(OffPolicyRLModel):
     """
     def __init__(self, policy, env, gamma=0.99, learning_rate=3e-4, buffer_size=50000,
                  buffer_type=ReplayBuffer, learning_starts=100, train_freq=100, gradient_steps=100, batch_size=128,
-                 tau=0.005, policy_delay=2, action_noise=None,
+                 tau=0.005, policy_delay=2, action_noise=None, action_l2_scale=0,
                  target_policy_noise=0.2, target_noise_clip=0.5,
                  random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None,
@@ -79,6 +79,7 @@ class TD3(OffPolicyRLModel):
         self.gradient_steps = gradient_steps
         self.gamma = gamma
         self.action_noise = action_noise
+        self.action_l2_scale = action_l2_scale
         self.random_exploration = random_exploration
         self.policy_delay = policy_delay
         self.target_noise_clip = target_noise_clip
@@ -191,7 +192,7 @@ class TD3(OffPolicyRLModel):
                     qvalues_losses = qf1_loss + qf2_loss
 
                     # Policy loss: maximise q value
-                    self.policy_loss = policy_loss = -tf.reduce_mean(qf1_pi) + 0.01 * tf.nn.l2_loss(self.policy_out)
+                    self.policy_loss = policy_loss = -tf.reduce_mean(qf1_pi) + self.action_l2_scale * tf.nn.l2_loss(self.policy_out)
 
                     # Policy train op
                     # will be called only every n training steps,
