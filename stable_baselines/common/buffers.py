@@ -16,7 +16,7 @@ class ReplayBuffer(object):
             memories are dropped.
         """
         self._storage = []
-        self._maxsize = size
+        self._maxsize = int(size)
         self._next_idx = 0
 
     def __len__(self) -> int:
