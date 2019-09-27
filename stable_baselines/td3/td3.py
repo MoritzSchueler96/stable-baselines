@@ -60,7 +60,7 @@ class TD3(OffPolicyRLModel):
                  tau=0.005, policy_delay=2, action_noise=None, action_l2_scale=0,
                  target_policy_noise=0.2, target_noise_clip=0.5,
                  random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
-                 _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False):
+                 _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, time_aware=False):
 
         super(TD3, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=TD3Policy, requires_vec_env=False, policy_kwargs=policy_kwargs)
@@ -80,6 +80,8 @@ class TD3(OffPolicyRLModel):
         self.policy_delay = policy_delay
         self.target_noise_clip = target_noise_clip
         self.target_policy_noise = target_policy_noise
+
+        self.time_aware = time_aware
 
         self.graph = None
         self.replay_buffer = None
@@ -344,7 +346,7 @@ class TD3(OffPolicyRLModel):
                 new_obs, reward, done, info = self.env.step(rescaled_action)
 
                 # Store transition in the replay buffer.
-                self.replay_buffer.add(obs, action, reward, new_obs, float(done))
+                self.replay_buffer.add(obs, action, reward, new_obs, float(done if not self.time_aware else done and info["termination"] != "steps"))
                 obs = new_obs
 
                 # Retrieve reward and episode length if using Monitor wrapper
