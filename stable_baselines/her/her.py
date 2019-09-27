@@ -115,7 +115,7 @@ class HER(BaseRLModel):
     def _check_obs(self, observation):
         if isinstance(observation, dict):
             if self.env is not None:
-                if len(observation['observation'].shape) > 1:
+                if len(observation['observation'].shape) > 1 and not getattr(self.env, "multi_dimensional_obs", False):
                     observation = _UnvecWrapper.unvec_obs(observation)
                     return [self.env.convert_dict_to_obs(observation)]
                 return self.env.convert_dict_to_obs(observation)
