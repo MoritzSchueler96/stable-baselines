@@ -66,9 +66,9 @@ class SAC(OffPolicyRLModel):
         Note: this has no effect on SAC logging for now
     """
 
-    def __init__(self, policy, env, gamma=0.99, learning_rate=3e-4, buffer_size=50000,
+    def __init__(self, policy, env, gamma=0.99, learning_rate=3e-4, buffer_size=50000, buffer_type=ReplayBuffer,
                  learning_starts=100, train_freq=1, batch_size=64,
-                 tau=0.005, ent_coef='auto', target_update_interval=1,
+                 tau=0.005, ent_coef='auto', target_update_interval=1, action_l2_scale=0,
                  gradient_steps=1, target_entropy='auto', action_noise=None,
                  random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False):
@@ -76,6 +76,7 @@ class SAC(OffPolicyRLModel):
         super(SAC, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=SACPolicy, requires_vec_env=False, policy_kwargs=policy_kwargs)
 
+        self.buffer_type = buffer_type
         self.buffer_size = buffer_size
         self.learning_rate = learning_rate
         self.learning_starts = learning_starts
@@ -89,6 +90,7 @@ class SAC(OffPolicyRLModel):
         # Entropy coefficient / Entropy temperature
         # Inverse of the reward scale
         self.ent_coef = ent_coef
+        self.action_l2_scale = action_l2_scale
         self.target_update_interval = target_update_interval
         self.gradient_steps = gradient_steps
         self.gamma = gamma
@@ -145,7 +147,7 @@ class SAC(OffPolicyRLModel):
                     n_cpu //= 2
                 self.sess = tf_util.make_session(num_cpu=n_cpu, graph=self.graph)
 
-                self.replay_buffer = ReplayBuffer(self.buffer_size)
+                self.replay_buffer = self.buffer_type(self.buffer_size)
 
                 with tf.variable_scope("input", reuse=False):
                     # Create policy and target TF objects
@@ -248,7 +250,7 @@ class SAC(OffPolicyRLModel):
                     # regularization loss for the gaussian parameters
                     # this is not used for now
                     # policy_loss = (policy_kl_loss + policy_regularization_loss)
-                    policy_loss = policy_kl_loss
+                    policy_loss = policy_kl_loss + self.action_l2_scale * tf.nn.l2_loss(policy_out)
 
 
                     # Target for value fn regression
