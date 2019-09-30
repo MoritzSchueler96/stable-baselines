@@ -10,7 +10,7 @@ import tensorflow as tf
 from stable_baselines.a2c.utils import total_episode_reward_logger
 from stable_baselines.common import tf_util, OffPolicyRLModel, SetVerbosity, TensorboardWriter
 from stable_baselines.common.vec_env import VecEnv
-from stable_baselines.deepq.replay_buffer import ReplayBuffer, DiscrepancyReplayBuffer, StableReplayBuffer
+from stable_baselines.deepq.replay_buffer import ReplayBuffer, DiscrepancyReplayBuffer, StableReplayBuffer, PrioritizedReplayBuffer
 from stable_baselines.ppo2.ppo2 import safe_mean, get_schedule_fn
 from stable_baselines.sac.sac import get_vars
 from stable_baselines.td3.policies import TD3Policy
@@ -233,9 +233,10 @@ class TD3(OffPolicyRLModel):
                     tf.summary.scalar('qf2_loss', qf2_loss)
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
 
-
-                #self.replay_buffer = ReplayBuffer(self.buffer_size)
-                self.replay_buffer = self.buffer_type(self.buffer_size)
+                try:
+                    self.replay_buffer = self.buffer_type(self.buffer_size)
+                except:
+                    self.replay_buffer = self.buffer_type(self.buffer_size, alpha=0.6)
                 #self.replay_buffer = DiscrepancyReplayBuffer(self.buffer_size, scorer=self.policy_tf.get_q_discrepancy)
 
                 # Retrieve parameters that must be saved
@@ -252,7 +253,11 @@ class TD3(OffPolicyRLModel):
     def _train_step(self, step, writer, learning_rate, update_policy):
         # Sample a batch from the replay buffer
         batch = self.replay_buffer.sample(self.batch_size)
-        batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
+        if isinstance(self.replay_buffer, PrioritizedReplayBuffer):
+            batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch[0]
+            batch_idxs = batch[2]
+        else:
+            batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
 
         feed_dict = {
             self.observations_ph: batch_obs,
@@ -280,6 +285,9 @@ class TD3(OffPolicyRLModel):
         # Unpack to monitor losses
         q_discrepancies = out.pop(-1)
         qf1_loss, qf2_loss, *_values = out
+
+        if isinstance(self.replay_buffer, PrioritizedReplayBuffer):
+            self.replay_buffer.update_priorities(idxes=batch_idxs, priorities=q_discrepancies)
 
         return qf1_loss, qf2_loss, q_discrepancies
 
