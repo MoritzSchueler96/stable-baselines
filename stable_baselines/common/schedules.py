@@ -9,6 +9,7 @@ Each schedule has a function `value(t)` which returns the current value
 of the parameter given the timestep t of the optimization procedure.
 """
 
+import math
 
 class Schedule(object):
     def value(self, step):
@@ -106,3 +107,23 @@ class LinearSchedule(Schedule):
     def value(self, step):
         fraction = min(float(step) / self.schedule_timesteps, 1.0)
         return self.initial_p + fraction * (self.final_p - self.initial_p)
+
+    def __call__(self, *args, **kwargs):
+        return self.value(*args, **kwargs)
+
+
+class ExponentialSchedule(Schedule):
+
+    def __init__(self, schedule_timesteps, final_p, initial_p=1.0, rate=10):
+        self.schedule_timesteps = schedule_timesteps
+        self.final_p = final_p
+        self.initial_p = initial_p
+
+    def value(self, step):
+        fraction = max(1 - float(step) / self.schedule_timesteps, 0)
+        return self.initial_p + math.exp(-fraction * 10) * (self.final_p - self.initial_p)
+
+    def __call__(self, *args, **kwargs):
+        return self.value(*args, **kwargs)
+
+
