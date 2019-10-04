@@ -182,7 +182,7 @@ class TD3(OffPolicyRLModel):
                     # Use two Q-functions to improve performance by reducing overestimation bias
                     qf1, qf2 = self.policy_tf.make_critics(self.processed_obs_ph, self.actions_ph)
                     # Q value when following the current policy
-                    qf1_pi, _ = self.policy_tf.make_critics(self.processed_obs_ph,
+                    qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph,
                                                             policy_out, reuse=True)
 
                 with tf.variable_scope("target", reuse=False):
@@ -216,6 +216,7 @@ class TD3(OffPolicyRLModel):
                         qf1_loss = tf.reduce_mean((q_backup - qf1) ** 2)
                         qf2_loss = tf.reduce_mean((q_backup - qf2) ** 2)
 
+                    q_discrepancy = tf.abs(qf1_pi - qf2_pi)
 
                     qvalues_losses = qf1_loss + qf2_loss
 

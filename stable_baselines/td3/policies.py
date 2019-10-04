@@ -165,7 +165,9 @@ class FeedForwardPolicy(TD3Policy):
 
             self.qf1 = qf1
             self.qf2 = qf2
-            self.q_discrepancy = tf.square(self.qf1 - self.qf2)
+            # TODO: assumes that all qf1 and qf2 can never have opposite signs
+            #self.q_discrepancy = tf.square(self.qf1 - self.qf2) / tf.square(tf.maximum(self.qf1, self.qf2))
+            self.q_discrepancy = tf.abs(self.qf1 - self.qf2)
 
         return self.qf1, self.qf2
 
@@ -173,6 +175,8 @@ class FeedForwardPolicy(TD3Policy):
         return self.sess.run(self.policy, {self.obs_ph: obs})
 
     def get_q_discrepancy(self, obs):
+        if isinstance(obs, np.ndarray) and len(obs.shape) == 1: # TODO: check for MLP or CNN policy here
+            obs = np.expand_dims(obs, axis=0)
         return self.sess.run(self.q_discrepancy, {self.obs_ph: obs})
 
 
