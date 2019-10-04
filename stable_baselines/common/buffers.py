@@ -8,6 +8,7 @@ from stable_baselines.common.vec_env import VecNormalize
 
 
 class ReplayBuffer(object):
+    __name__ = "ReplayBuffer"
     def __init__(self, size: int):
         """
         Implements a ring buffer (FIFO).
@@ -144,6 +145,8 @@ class ReplayBuffer(object):
 
 
 class PrioritizedReplayBuffer(ReplayBuffer):
+    __name__ = "PrioritizedReplayBuffer"
+
     def __init__(self, size, alpha):
         """
         Create Prioritized Replay buffer.

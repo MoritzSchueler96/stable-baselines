@@ -52,6 +52,7 @@ class HindsightExperienceReplayWrapper(object):
     :param wrapped_env: (HERGoalEnvWrapper) the GoalEnv wrapped using HERGoalEnvWrapper,
         that enables to convert observation to dict, and vice versa
     """
+    __name__ = "HindsightExperienceReplayWrapper"
 
     def __init__(self, replay_buffer, n_sampled_goal, goal_selection_strategy, wrapped_env):
         super(HindsightExperienceReplayWrapper, self).__init__()
