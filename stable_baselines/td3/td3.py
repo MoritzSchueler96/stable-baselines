@@ -14,6 +14,7 @@ from stable_baselines.common.schedules import get_schedule_fn
 from stable_baselines.common.buffers import ReplayBuffer, DiscrepancyReplayBuffer, StableReplayBuffer, PrioritizedReplayBuffer
 from stable_baselines.td3.policies import TD3Policy
 from stable_baselines import logger
+from stable_baselines.common.schedules import ExponentialSchedule
 
 
 class TD3(OffPolicyRLModel):
@@ -217,11 +218,17 @@ class TD3(OffPolicyRLModel):
                         qf2_loss = tf.reduce_mean((q_backup - qf2) ** 2)
 
                     q_discrepancy = tf.abs(qf1_pi - qf2_pi)
+                    self.q_disc_strength_ph = tf.placeholder(tf.float32, [], name="q_disc_strength_ph")
+                    self.q_disc_strength_schedule = ExponentialSchedule(int(1e5), 30, 0, rate=10)
 
                     qvalues_losses = qf1_loss + qf2_loss
 
+                    rew_loss = tf.reduce_mean(qf1_pi)
+                    q_disc_loss = self.q_disc_strength_ph * tf.reduce_mean(q_discrepancy)
+                    action_loss = self.action_l2_scale * tf.nn.l2_loss(self.policy_out)
+
                     # Policy loss: maximise q value
-                    self.policy_loss = policy_loss = -tf.reduce_mean(qf1_pi) + self.action_l2_scale * tf.nn.l2_loss(self.policy_out)
+                    self.policy_loss = policy_loss = -(rew_loss + q_disc_loss) + action_loss
 
                     # Policy train op
                     # will be called only every n training steps,
@@ -258,6 +265,9 @@ class TD3(OffPolicyRLModel):
                                      qf1, qf2, train_values_op, q_discrepancy]
 
                     # Monitor losses and entropy in tensorboard
+                    tf.summary.scalar("rew_loss", rew_loss)
+                    tf.summary.scalar("q_disc_loss", q_disc_loss)
+                    tf.summary.scalar("action_loss", action_loss)
                     tf.summary.scalar('policy_loss', policy_loss)
                     tf.summary.scalar('qf1_loss', qf1_loss)
                     tf.summary.scalar('qf2_loss', qf2_loss)
@@ -293,7 +303,8 @@ class TD3(OffPolicyRLModel):
             self.next_observations_ph: batch_next_obs,
             self.rewards_ph: batch_rewards.reshape(self.batch_size, -1),
             self.terminals_ph: batch_dones.reshape(self.batch_size, -1),
-            self.learning_rate_ph: learning_rate
+            self.learning_rate_ph: learning_rate,
+            self.q_disc_strength_ph: self.q_disc_strength_schedule(self.num_timesteps)
         }
 
         if self.buffer_is_prioritized:
