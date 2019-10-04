@@ -114,6 +114,7 @@ class FeedForwardPolicy(TD3Policy):
             layers = [64, 64]
         self.layers = layers
         self.obs_module_indices = obs_module_indices
+        self.policy_t = None
 
         assert len(layers) >= 1, "Error: must have at least one hidden layer for the policy."
 
@@ -126,15 +127,26 @@ class FeedForwardPolicy(TD3Policy):
         if self.obs_module_indices is not None:
             obs = tf.gather(obs, self.obs_module_indices["pi"], axis=-1)
 
-        with tf.variable_scope(scope, reuse=reuse):
-            if self.feature_extraction == "cnn":
-                pi_h = self.cnn_extractor(obs, name="pi_c1", act_fun=self.activ_fn, **self.cnn_kwargs)
-            else:
-                pi_h = tf.layers.flatten(obs)
+        if self.policy is not None:
+            with tf.variable_scope(scope, reuse=reuse):
+                if self.feature_extraction == "cnn":
+                    pi_h = self.cnn_extractor(obs, name="pi_c1", act_fun=self.activ_fn, **self.cnn_kwargs)
+                else:
+                    pi_h = tf.layers.flatten(obs)
 
-            pi_h = mlp(pi_h, self.layers, self.activ_fn, layer_norm=self.layer_norm)
+                pi_h = mlp(pi_h, self.layers, self.activ_fn, layer_norm=self.layer_norm)
 
-            self.policy = policy = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=tf.tanh)
+                self.policy_t = policy = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=tf.tanh)
+        else:
+            with tf.variable_scope(scope, reuse=reuse):
+                if self.feature_extraction == "cnn":
+                    pi_h = self.cnn_extractor(obs, name="pi_c1", act_fun=self.activ_fn, **self.cnn_kwargs)
+                else:
+                    pi_h = tf.layers.flatten(obs)
+
+                pi_h = mlp(pi_h, self.layers, self.activ_fn, layer_norm=self.layer_norm)
+
+                self.policy = policy = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=tf.tanh)
 
         return policy
 
@@ -171,7 +183,9 @@ class FeedForwardPolicy(TD3Policy):
 
         return self.qf1, self.qf2
 
-    def step(self, obs, state=None, mask=None):
+    def step(self, obs, state=None, mask=None, test=False):
+        if test:
+            return self.sess.run(self.policy_t, {self.obs_ph: obs})
         return self.sess.run(self.policy, {self.obs_ph: obs})
 
     def get_q_discrepancy(self, obs):
