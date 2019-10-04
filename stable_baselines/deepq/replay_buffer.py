@@ -6,6 +6,8 @@ from stable_baselines.common.segment_tree import SumSegmentTree, MinSegmentTree
 
 
 class ReplayBuffer(object):
+    __name__ = "ReplayBuffer"
+
     def __init__(self, size):
         """
         Implements a ring buffer (FIFO).
@@ -96,6 +98,8 @@ class ReplayBuffer(object):
 
 
 class PrioritizedReplayBuffer(ReplayBuffer):
+    __name__ = "PrioritizedReplayBuffer"
+
     def __init__(self, size, alpha):
         """
         Create Prioritized Replay buffer.
@@ -191,6 +195,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             denoted by variable `idxes`.
         """
         assert len(idxes) == len(priorities)
+        priorities += 1e-8
         for idx, priority in zip(idxes, priorities):
             assert priority > 0
             assert 0 <= idx < len(self._storage)

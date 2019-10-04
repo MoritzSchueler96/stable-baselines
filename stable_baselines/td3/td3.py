@@ -7,6 +7,7 @@ import warnings
 import numpy as np
 import tensorflow as tf
 
+from stable_baselines.her import HindsightExperienceReplayWrapper
 from stable_baselines.a2c.utils import total_episode_reward_logger
 from stable_baselines.common import tf_util, OffPolicyRLModel, SetVerbosity, TensorboardWriter
 from stable_baselines.common.vec_env import VecEnv
@@ -56,7 +57,8 @@ class TD3(OffPolicyRLModel):
     """
 
     def __init__(self, policy, env, gamma=0.99, learning_rate=3e-4, buffer_size=50000,
-                 buffer_type=ReplayBuffer, learning_starts=100, train_freq=100, gradient_steps=100, batch_size=128,
+                 buffer_type=ReplayBuffer, prioritization_starts=0, beta_schedule=None,
+                 learning_starts=100, train_freq=100, gradient_steps=100, batch_size=128,
                  tau=0.005, policy_delay=2, action_noise=None, action_l2_scale=0,
                  target_policy_noise=0.2, target_noise_clip=0.5,
                  random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
@@ -65,6 +67,10 @@ class TD3(OffPolicyRLModel):
         super(TD3, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=TD3Policy, requires_vec_env=False, policy_kwargs=policy_kwargs)
 
+        self.prioritization_starts = prioritization_starts
+        self.beta_schedule = beta_schedule
+        self.buffer_is_prioritized = buffer_type.__name__ in ["PrioritizedReplayBuffer", "RankPrioritizedReplayBuffer"]
+        self.loss_history = None
         self.buffer_type = buffer_type
         self.buffer_size = buffer_size
         self.learning_rate = learning_rate
@@ -102,6 +108,7 @@ class TD3(OffPolicyRLModel):
         self.observations_ph = None
         self.action_target = None
         self.next_observations_ph = None
+        self.is_weights_ph = None
         self.step_ops = None
         self.target_ops = None
         self.infos_names = None
@@ -132,6 +139,22 @@ class TD3(OffPolicyRLModel):
                 if sys.platform == 'darwin':
                     n_cpu //= 2
                 self.sess = tf_util.make_session(num_cpu=n_cpu, graph=self.graph)
+
+                self.buffer_is_prioritized = self.buffer_type.__name__ in ["PrioritizedReplayBuffer", "RankPrioritizedReplayBuffer"]
+
+                if self.replay_buffer is None:
+                    if self.buffer_is_prioritized:
+                        if self.num_timesteps is not None and self.prioritization_starts > self.num_timesteps or self.prioritization_starts > 0:
+                            self.replay_buffer = ReplayBuffer(self.buffer_size)
+                        else:
+                            buffer_kw = {"size": self.buffer_size, "alpha": 0.7}
+                            if self.buffer_type.__name__ == "RankPrioritizedReplayBuffer":
+                                buffer_kw.update({"learning_starts": self.prioritization_starts, "batch_size": self.batch_size})
+                            self.replay_buffer = self.buffer_type(**buffer_kw)
+                    else:
+                        self.replay_buffer = self.buffer_type(self.buffer_size)
+
+                #self.replay_buffer = DiscrepancyReplayBuffer(self.buffer_size, scorer=self.policy_tf.get_q_discrepancy)
 
                 with tf.variable_scope("input", reuse=False):
                     # Create policy and target TF objects
@@ -185,10 +208,14 @@ class TD3(OffPolicyRLModel):
                     )
 
                     # Compute Q-Function loss
-                    qf1_loss = tf.reduce_mean((q_backup - qf1) ** 2)
-                    qf2_loss = tf.reduce_mean((q_backup - qf2) ** 2)
+                    if self.buffer_is_prioritized:
+                        self.is_weights_ph = tf.placeholder(tf.float32, shape=(None, 1), name="is_weights")
+                        qf1_loss = tf.reduce_mean(self.is_weights_ph * (q_backup - qf1) ** 2)
+                        qf2_loss = tf.reduce_mean(self.is_weights_ph * (q_backup - qf2) ** 2)
+                    else:
+                        qf1_loss = tf.reduce_mean((q_backup - qf1) ** 2)
+                        qf2_loss = tf.reduce_mean((q_backup - qf2) ** 2)
 
-                    q_discrepancy = tf.square(qf1 - qf2)
 
                     qvalues_losses = qf1_loss + qf2_loss
 
@@ -235,12 +262,6 @@ class TD3(OffPolicyRLModel):
                     tf.summary.scalar('qf2_loss', qf2_loss)
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
 
-                try:
-                    self.replay_buffer = self.buffer_type(self.buffer_size)
-                except:
-                    self.replay_buffer = self.buffer_type(self.buffer_size, alpha=0.6)
-                #self.replay_buffer = DiscrepancyReplayBuffer(self.buffer_size, scorer=self.policy_tf.get_q_discrepancy)
-
                 # Retrieve parameters that must be saved
                 self.params = get_vars("model")
                 self.target_params = get_vars("target/")
@@ -254,12 +275,16 @@ class TD3(OffPolicyRLModel):
 
     def _train_step(self, step, writer, learning_rate, update_policy):
         # Sample a batch from the replay buffer
-        batch = self.replay_buffer.sample(self.batch_size)
-        if isinstance(self.replay_buffer, PrioritizedReplayBuffer):
-            batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch[0]
-            batch_idxs = batch[2]
+        if self.buffer_is_prioritized and self.num_timesteps >= self.prioritization_starts:
+            batch = self.replay_buffer.sample(self.batch_size, beta=self.beta_schedule(self.num_timesteps))
+            batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, batch_weights, batch_idxs = batch
+            if len(batch_weights.shape) == 1:
+                batch_weights = np.expand_dims(batch_weights, axis=1)
         else:
+            batch = self.replay_buffer.sample(self.batch_size)
             batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
+            if self.buffer_is_prioritized:
+                batch_weights = np.ones(shape=(self.batch_size, 1))
 
         feed_dict = {
             self.observations_ph: batch_obs,
@@ -269,6 +294,9 @@ class TD3(OffPolicyRLModel):
             self.terminals_ph: batch_dones.reshape(self.batch_size, -1),
             self.learning_rate_ph: learning_rate
         }
+
+        if self.buffer_is_prioritized:
+            feed_dict[self.is_weights_ph] = batch_weights
 
         step_ops = self.step_ops
         if update_policy:
@@ -285,11 +313,14 @@ class TD3(OffPolicyRLModel):
             out = self.sess.run(step_ops, feed_dict)
 
         # Unpack to monitor losses
-        q_discrepancies = out.pop(-1)
+        q_discrepancies = out.pop(5)
         qf1_loss, qf2_loss, *_values = out
 
-        if isinstance(self.replay_buffer, PrioritizedReplayBuffer):
-            self.replay_buffer.update_priorities(idxes=batch_idxs, priorities=q_discrepancies)
+        if self.buffer_is_prioritized and self.num_timesteps >= self.prioritization_starts:
+            if isinstance(self.replay_buffer, HindsightExperienceReplayWrapper):
+                self.replay_buffer.replay_buffer.update_priorities(batch_idxs, q_discrepancies)
+            else:
+                self.replay_buffer.update_priorities(batch_idxs, q_discrepancies)
 
         return qf1_loss, qf2_loss, q_discrepancies
 
@@ -325,6 +356,12 @@ class TD3(OffPolicyRLModel):
             self.active_sampling = False
             initial_step = self.num_timesteps
 
+            if self.buffer_is_prioritized and \
+                    ((replay_wrapper is not None and self.replay_buffer.replay_buffer.__name__ == "ReplayBuffer")
+                     or (replay_wrapper is None and self.replay_buffer.__name__ == "ReplayBuffer")) \
+                    and self.num_timesteps >= self.prioritization_starts:
+                self._set_prioritized_buffer()
+
             for step in range(initial_step, total_timesteps):
                 if callback is not None:
                     # Only stop training if return value is False, not when it is None. This is for backwards
@@ -357,6 +394,11 @@ class TD3(OffPolicyRLModel):
                 self.replay_buffer.add(obs, action, reward, new_obs, float(done if not self.time_aware else done and info["termination"] != "steps"))
                 obs = new_obs
 
+                if ((replay_wrapper is not None and self.replay_buffer.replay_buffer.__name__ == "RankPrioritizedReplayBuffer")\
+                        or self.replay_buffer.__name__ == "RankPrioritizedReplayBuffer") and \
+                        self.num_timesteps % self.buffer_size == 0:
+                    self.replay_buffer.rebalance()
+
                 # Retrieve reward and episode length if using Monitor wrapper
                 maybe_ep_info = info.get('episode')
                 if maybe_ep_info is not None:
@@ -380,7 +422,7 @@ class TD3(OffPolicyRLModel):
                             break
                         n_updates += 1
                         # Compute current learning_rate
-                        frac = 1.0 - step / total_timesteps
+                        frac = 1.0 - self.num_timesteps / total_timesteps
                         current_lr = self.learning_rate(frac)
                         # Update policy and critics (q functions)
                         # Note: the policy is updated less frequently than the Q functions
@@ -420,6 +462,13 @@ class TD3(OffPolicyRLModel):
 
                 num_episodes = len(episode_rewards)
                 self.num_timesteps += 1
+
+                if self.buffer_is_prioritized and \
+                        ((replay_wrapper is not None and self.replay_buffer.replay_buffer.__name__ == "ReplayBuffer")
+                         or (replay_wrapper is None and self.replay_buffer.__name__ == "ReplayBuffer"))\
+                        and self.num_timesteps >= self.prioritization_starts:
+                    self._set_prioritized_buffer()
+
                 # Display training infos
                 if self.verbose >= 1 and done and log_interval is not None and len(episode_rewards) % log_interval == 0:
                     fps = int(step / (time.time() - start_time))
@@ -477,6 +526,25 @@ class TD3(OffPolicyRLModel):
 
         return env
 
+    def _set_prioritized_buffer(self):
+        buffer_kw = {"size": self.buffer_size, "alpha": 0.7}
+        if self.buffer_type.__name__ == "RankPrioritizedReplayBuffer":
+            buffer_kw.update({"learning_starts": self.prioritization_starts, "batch_size": self.batch_size})
+        r_buf = self.buffer_type(**buffer_kw)
+
+        for i, transition in enumerate(self.replay_buffer._storage):
+            r_buf.add(*transition)
+            r_buf.update_priorities([i], self.policy_tf.get_q_discrepancy(transition[0])[0])
+        if r_buf.__name__ == "RankPrioritizedReplayBuffer":
+            r_buf.rebalance()
+        if isinstance(self.replay_buffer, HindsightExperienceReplayWrapper):
+            self.replay_buffer.replay_buffer = r_buf
+        else:
+            self.replay_buffer = r_buf
+        self.learning_rate = get_schedule_fn(self.learning_rate(1) / 4)  # TODO: will not work with non-constant
+        self.beta_schedule = get_schedule_fn(self.beta_schedule)
+        print("Enabled prioritized replay buffer")
+
     def get_parameter_list(self):
         return (self.params +
                 self.target_params)
@@ -492,7 +560,7 @@ class TD3(OffPolicyRLModel):
             # Should we also store the replay buffer?
             # this may lead to high memory usage
             # with all transition inside
-            # "replay_buffer": self.replay_buffer
+            "replay_buffer": self.replay_buffer,
             "policy_delay": self.policy_delay,
             "target_noise_clip": self.target_noise_clip,
             "target_policy_noise": self.target_policy_noise,
