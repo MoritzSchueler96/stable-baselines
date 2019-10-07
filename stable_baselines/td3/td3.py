@@ -618,3 +618,43 @@ class TD3(OffPolicyRLModel):
         params_to_save = self.get_parameters()
 
         self._save_to_file(save_path, data=data, params=params_to_save)
+
+    def pretrain_value_function(self, n_batches=int(1e5), batch_size=100):
+        def score(desired_goal, achieved_goal):
+            return -np.linalg.norm(desired_goal - achieved_goal, axis=1)  # possibly weighted by gamma
+
+        with self.graph.as_default():
+            with tf.variable_scope('pretrain'):
+                target_ph = tf.placeholder(tf.float32,  shape=None, name='pretrain_target')
+                loss_q1 = tf.reduce_mean(tf.square(self.policy_tf.qf1 - target_ph))
+                loss_q2 = tf.reduce_mean(tf.square(self.policy_tf.qf2 - target_ph))
+
+                optimizer_q1 = tf.train.AdamOptimizer(learning_rate=1e-3, epsilon=1e-8)
+                optim_op_q1 = optimizer_q1.minimize(loss_q1, var_list=get_vars('model/values_fn/qf1'))
+
+                optimizer_q2 = tf.train.AdamOptimizer(learning_rate=1e-3, epsilon=1e-8)
+                optim_op_q2 = optimizer_q2.minimize(loss_q2, var_list=get_vars('model/values_fn/qf2'))
+
+            self.sess.run(tf.global_variables_initializer())
+        # optimizers for loss
+
+        train_loss = [deque(maxlen=1000), deque(maxlen=1000)]
+        for batch_i in range(n_batches):
+            i = 0
+            for loss, optim in zip([loss_q1, loss_q2], [optim_op_q1, optim_op_q2]):
+                batch_obs = np.random.normal(loc=0, scale=1.5, size=(batch_size, *self.observation_space.shape))
+                scores = score(batch_obs[:, -6:-3], batch_obs[:, -3:])
+                batch_actions = np.random.uniform(-1, 1, size=(batch_size, *self.action_space.shape))
+                feed_dict = {self.observations_ph: batch_obs, self.actions_ph: batch_actions, target_ph: scores}
+                train_loss_, _ = self.sess.run([loss, optim], feed_dict)
+                train_loss[i].append(train_loss_)
+                i += 1
+            if batch_i % 1000 == 0 and batch_i != 0:
+                print("Training loss after {} ({}%) batches:\n\tQ1: {},\tQ2: {}".format(batch_i, 100 * batch_i / n_batches, np.mean(train_loss[0]), np.mean(train_loss[1])))
+            # generate random batch of observations
+            # get score for each sample in batch (diff in achieved and desired goal)
+            # randomize action
+            # feed observation and action to network, train to [-x, 0]
+            # different data for each q-function?
+            # train for fixed amount of time or until loss < epsilon?
+
