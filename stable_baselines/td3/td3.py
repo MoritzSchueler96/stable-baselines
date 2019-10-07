@@ -16,7 +16,7 @@ from stable_baselines.td3.policies import TD3Policy
 from stable_baselines import logger
 from stable_baselines.common.schedules import ExponentialSchedule
 
-
+test = False
 class TD3(OffPolicyRLModel):
     """
     Twin Delayed DDPG (TD3)
@@ -180,13 +180,16 @@ class TD3(OffPolicyRLModel):
                 with tf.variable_scope("model", reuse=False):
                     # Create the policy
                     self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph)
-                    self.policy_test = policy_test = self.policy_tf.make_actor(self.processed_obs_ph, scope="pi_t")
+
                     # Use two Q-functions to improve performance by reducing overestimation bias
                     qf1, qf2 = self.policy_tf.make_critics(self.processed_obs_ph, self.actions_ph)
                     # Q value when following the current policy
                     qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph,
                                                             policy_out, reuse=True)
-                    qf1_pi_t, _ = self.policy_tf.make_critics(self.processed_obs_ph, policy_test, reuse=True)
+
+                    if test:
+                        self.policy_test = policy_test = self.policy_tf.make_actor(self.processed_obs_ph, scope="pi_t")
+                        qf1_pi_t, _ = self.policy_tf.make_critics(self.processed_obs_ph, policy_test, reuse=True)
 
                 with tf.variable_scope("target", reuse=False):
                     # Create target networks
@@ -220,18 +223,22 @@ class TD3(OffPolicyRLModel):
                         qf2_loss = tf.reduce_mean((q_backup - qf2) ** 2)
 
                     q_discrepancy = tf.abs(qf1_pi - qf2_pi)
-                    self.q_disc_strength_ph = tf.placeholder(tf.float32, [], name="q_disc_strength_ph")
-                    self.q_disc_strength_schedule = ExponentialSchedule(int(1e5), 30, 0, rate=10)
-
                     qvalues_losses = qf1_loss + qf2_loss
 
                     rew_loss = tf.reduce_mean(qf1_pi)
-                    q_disc_loss = tf.reduce_mean(q_discrepancy)#self.q_disc_strength_ph * tf.reduce_mean(q_discrepancy)
+
                     action_loss = self.action_l2_scale * tf.nn.l2_loss(self.policy_out)
 
                     # Policy loss: maximise q value
-                    self.policy_loss = policy_loss = -(rew_loss + q_disc_loss) + action_loss
-                    self.policy_loss_t = policy_loss_t = -tf.reduce_mean(qf1_pi_t)
+                    if test:
+                        self.q_disc_strength_ph = tf.placeholder(tf.float32, [], name="q_disc_strength_ph")
+                        self.q_disc_strength_schedule = ExponentialSchedule(int(1e5), 30, 0, rate=10)
+                        q_disc_loss = tf.reduce_mean(
+                            q_discrepancy)  # self.q_disc_strength_ph * tf.reduce_mean(q_discrepancy)
+                        self.policy_loss = policy_loss = -(rew_loss + q_disc_loss) + action_loss
+                    else:
+                        self.policy_loss = policy_loss = -rew_loss + action_loss
+
 
                     # Policy train op
                     # will be called only every n training steps,
@@ -240,9 +247,11 @@ class TD3(OffPolicyRLModel):
                     policy_train_op = policy_optimizer.minimize(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
                     self.policy_train_op = policy_train_op
 
-                    policy_optimizer_t = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
-                    policy_train_op_t = policy_optimizer_t.minimize(policy_loss_t, var_list=get_vars('model/pi_t'))
-                    self.policy_train_op_t = policy_train_op_t
+                    if test:
+                        self.policy_loss_t = policy_loss_t = -tf.reduce_mean(qf1_pi_t)
+                        policy_optimizer_t = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
+                        policy_train_op_t = policy_optimizer_t.minimize(policy_loss_t, var_list=get_vars('model/pi_t'))
+                        self.policy_train_op_t = policy_train_op_t
 
                     # Q Values optimizer
                     qvalues_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
@@ -252,7 +261,8 @@ class TD3(OffPolicyRLModel):
                     source_params = tf_util.get_trainable_vars("model/")
                     target_params = tf_util.get_trainable_vars("target/")
 
-                    source_params = [param for param in source_params if "pi_t" not in param.name]
+                    if test:
+                        source_params = [param for param in source_params if "pi_t" not in param.name]
 
                     # Polyak averaging for target variables
                     self.target_ops = [
@@ -275,10 +285,11 @@ class TD3(OffPolicyRLModel):
 
                     # Monitor losses and entropy in tensorboard
                     tf.summary.scalar("rew_loss", rew_loss)
-                    tf.summary.scalar("q_disc_loss", q_disc_loss)
                     tf.summary.scalar("action_loss", action_loss)
                     tf.summary.scalar('policy_loss', policy_loss)
-                    tf.summary.scalar("policy_loss_t", policy_loss_t)
+                    if test:
+                        tf.summary.scalar("q_disc_loss", q_disc_loss)
+                        tf.summary.scalar("policy_loss_t", policy_loss_t)
                     tf.summary.scalar('qf1_loss', qf1_loss)
                     tf.summary.scalar('qf2_loss', qf2_loss)
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
@@ -313,9 +324,11 @@ class TD3(OffPolicyRLModel):
             self.next_observations_ph: batch_next_obs,
             self.rewards_ph: batch_rewards.reshape(self.batch_size, -1),
             self.terminals_ph: batch_dones.reshape(self.batch_size, -1),
-            self.learning_rate_ph: learning_rate,
-            self.q_disc_strength_ph: self.q_disc_strength_schedule(self.num_timesteps)
+            self.learning_rate_ph: learning_rate
         }
+
+        if test:
+            feed_dict[self.q_disc_strength_ph] = self.q_disc_strength_schedule(self.num_timesteps)
 
         if self.buffer_is_prioritized:
             feed_dict[self.is_weights_ph] = batch_weights
@@ -323,7 +336,10 @@ class TD3(OffPolicyRLModel):
         step_ops = self.step_ops
         if update_policy:
             # Update policy and target networks
-            step_ops = step_ops + [self.policy_train_op, self.policy_train_op_t, self.target_ops, self.policy_loss, self.policy_loss_t]
+            if test:
+                step_ops = step_ops + [self.policy_train_op, self.policy_train_op_t, self.target_ops, self.policy_loss, self.policy_loss_t]
+            else:
+                step_ops = step_ops + [self.policy_train_op, self.target_ops, self.policy_loss]
 
         # Do one gradient step
         # and optionally compute log for tensorboard
