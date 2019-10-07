@@ -18,7 +18,7 @@ from stable_baselines.td3.policies import TD3Policy
 from stable_baselines import logger
 from stable_baselines.common.schedules import ExponentialSchedule
 
-test = False
+experimental = False
 class TD3(OffPolicyRLModel):
     """
     Twin Delayed DDPG (TD3)
@@ -187,7 +187,7 @@ class TD3(OffPolicyRLModel):
                     qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph,
                                                             policy_out, reuse=True)
 
-                    if test:
+                    if experimental:
                         self.policy_test = policy_test = self.policy_tf.make_actor(self.processed_obs_ph, scope="pi_t")
                         qf1_pi_t, _ = self.policy_tf.make_critics(self.processed_obs_ph, policy_test, reuse=True)
 
@@ -230,7 +230,7 @@ class TD3(OffPolicyRLModel):
                     action_loss = self.action_l2_scale * tf.nn.l2_loss(self.policy_out)
 
                     # Policy loss: maximise q value
-                    if test:
+                    if experimental:
                         self.q_disc_strength_ph = tf.placeholder(tf.float32, [], name="q_disc_strength_ph")
                         self.q_disc_strength_schedule = ExponentialSchedule(int(1e5), 30, 0, rate=10)
                         q_disc_loss = tf.reduce_mean(
@@ -247,7 +247,7 @@ class TD3(OffPolicyRLModel):
                     policy_train_op = policy_optimizer.minimize(policy_loss, var_list=get_vars('model/pi'))
                     self.policy_train_op = policy_train_op
 
-                    if test:
+                    if experimental:
                         self.policy_loss_t = policy_loss_t = -tf.reduce_mean(qf1_pi_t)
                         policy_optimizer_t = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
                         policy_train_op_t = policy_optimizer_t.minimize(policy_loss_t, var_list=get_vars('model/pi_t'))
@@ -261,7 +261,7 @@ class TD3(OffPolicyRLModel):
                     source_params = get_vars("model/")
                     target_params = get_vars("target/")
 
-                    if test:
+                    if experimental:
                         source_params = [param for param in source_params if "pi_t" not in param.name]
 
                     # Polyak averaging for target variables
@@ -287,7 +287,7 @@ class TD3(OffPolicyRLModel):
                     tf.summary.scalar("rew_loss", rew_loss)
                     tf.summary.scalar("action_loss", action_loss)
                     tf.summary.scalar('policy_loss', policy_loss)
-                    if test:
+                    if experimental:
                         tf.summary.scalar("q_disc_loss", q_disc_loss)
                         tf.summary.scalar("policy_loss_t", policy_loss_t)
                     tf.summary.scalar('qf1_loss', qf1_loss)
@@ -327,7 +327,7 @@ class TD3(OffPolicyRLModel):
             self.learning_rate_ph: learning_rate
         }
 
-        if test:
+        if experimental:
             feed_dict[self.q_disc_strength_ph] = self.q_disc_strength_schedule(self.num_timesteps)
 
         if self.buffer_is_prioritized:
@@ -336,7 +336,7 @@ class TD3(OffPolicyRLModel):
         step_ops = self.step_ops
         if update_policy:
             # Update policy and target networks
-            if test:
+            if experimental:
                 step_ops = step_ops + [self.policy_train_op, self.policy_train_op_t, self.target_ops, self.policy_loss, self.policy_loss_t]
             else:
                 step_ops = step_ops + [self.policy_train_op, self.target_ops, self.policy_loss]
@@ -545,7 +545,7 @@ class TD3(OffPolicyRLModel):
         vectorized_env = self._is_vectorized_observation(observation, self.observation_space)
 
         observation = observation.reshape((-1,) + self.observation_space.shape)
-        actions = self.policy_tf.step(observation, test=deterministic)
+        actions = self.policy_tf.step(observation, test=experimental and deterministic)
 
         if self.action_noise is not None and not deterministic:
             actions = np.clip(actions + self.action_noise(), -1, 1)
