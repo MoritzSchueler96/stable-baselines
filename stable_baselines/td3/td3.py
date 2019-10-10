@@ -626,8 +626,8 @@ class TD3(OffPolicyRLModel):
         with self.graph.as_default():
             with tf.variable_scope('pretrain'):
                 target_ph = tf.placeholder(tf.float32,  shape=None, name='pretrain_target')
-                loss_q1 = tf.reduce_mean(tf.square(self.policy_tf.qf1 - target_ph))
-                loss_q2 = tf.reduce_mean(tf.square(self.policy_tf.qf2 - target_ph))
+                loss_q1 = tf.reduce_mean(tf.square(self.policy_tf.qf1 - target_ph)) + tf.add_n([tf.nn.l2_loss(v) for v in get_vars('model/values_fn/qf1') if "bias" not in v.name])
+                loss_q2 = tf.reduce_mean(tf.square(self.policy_tf.qf2 - target_ph)) + tf.add_n([tf.nn.l2_loss(v) for v in get_vars('model/values_fn/qf2') if "bias" not in v.name])
 
                 optimizer_q1 = tf.train.AdamOptimizer(learning_rate=1e-3, epsilon=1e-8)
                 optim_op_q1 = optimizer_q1.minimize(loss_q1, var_list=get_vars('model/values_fn/qf1'))
@@ -638,23 +638,45 @@ class TD3(OffPolicyRLModel):
             self.sess.run(tf.global_variables_initializer())
         # optimizers for loss
 
+        validation_set = {"obs": np.random.normal(loc=0, scale=1.5, size=(int(5e3), *self.observation_space.shape)),
+                       "action": np.random.uniform(-1, 1, size=(int(5e3), *self.action_space.shape))
+                       }
+        validation_set["score"] = score(validation_set["obs"][:, -6:-3], validation_set["obs"][:, -3:])
+
         train_loss = [deque(maxlen=1000), deque(maxlen=1000)]
         for batch_i in range(n_batches):
             i = 0
             for loss, optim in zip([loss_q1, loss_q2], [optim_op_q1, optim_op_q2]):
                 batch_obs = np.random.normal(loc=0, scale=1.5, size=(batch_size, *self.observation_space.shape))
+                batch_obs[:, -3:] = np.random.normal(loc=batch_obs[:, -6:-3], scale=min(1.5, (5 * batch_i / n_batches) * 1.5), size=(batch_size, 3))
                 scores = score(batch_obs[:, -6:-3], batch_obs[:, -3:])
                 batch_actions = np.random.uniform(-1, 1, size=(batch_size, *self.action_space.shape))
                 feed_dict = {self.observations_ph: batch_obs, self.actions_ph: batch_actions, target_ph: scores}
                 train_loss_, _ = self.sess.run([loss, optim], feed_dict)
                 train_loss[i].append(train_loss_)
                 i += 1
-            if batch_i % 1000 == 0 and batch_i != 0:
+            if batch_i % 5000 == 0 and batch_i != 0:
                 print("Training loss after {} ({}%) batches:\n\tQ1: {},\tQ2: {}".format(batch_i, 100 * batch_i / n_batches, np.mean(train_loss[0]), np.mean(train_loss[1])))
+                print("Validation loss:")
+                feed_dict = {self.observations_ph: validation_set["obs"], self.actions_ph: validation_set["action"], target_ph: validation_set["score"]}
+                for loss, optim in zip([loss_q1, loss_q2], [optim_op_q1, optim_op_q2]):
+                    val_loss_, _ = self.sess.run([loss, optim], feed_dict)
+                    val_loss_ /= validation_set["obs"].shape[0]
+                    print("\tQn: {}".format(val_loss_))
+
             # generate random batch of observations
             # get score for each sample in batch (diff in achieved and desired goal)
             # randomize action
             # feed observation and action to network, train to [-x, 0]
             # different data for each q-function?
             # train for fixed amount of time or until loss < epsilon?
+        # Initializing target to match source variables
+
+        source_params = get_vars("model/")
+        target_params = get_vars("target/")
+        target_init_op = [
+            tf.assign(target, source)
+            for target, source in zip(target_params, source_params)
+        ]
+        self.sess.run(target_init_op)
 
