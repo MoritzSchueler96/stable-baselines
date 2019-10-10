@@ -267,7 +267,7 @@ class TD3(OffPolicyRLModel):
                     action_loss = self.action_l2_scale * tf.nn.l2_loss(self.policy_out)
 
                     # Policy loss: maximise q value
-                    self.policy_loss = policy_loss = -(rew_loss + q_disc_loss) + action_loss
+                    self.policy_loss = policy_loss = -rew_loss + action_loss
 
                     # Policy train op
                     # will be called only every n training steps,
