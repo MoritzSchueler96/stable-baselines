@@ -267,7 +267,7 @@ class TD3(OffPolicyRLModel):
                     action_loss = self.action_l2_scale * tf.nn.l2_loss(self.policy_out)
 
                     # Policy loss: maximise q value
-                    self.policy_loss = policy_loss = -(rew_loss + q_disc_loss) + action_loss
+                    self.policy_loss = policy_loss = -rew_loss + action_loss
 
                     # Policy train op
                     # will be called only every n training steps,
@@ -342,8 +342,7 @@ class TD3(OffPolicyRLModel):
             self.next_observations_ph: batch_next_obs,
             self.rewards_ph: batch_rewards.reshape(self.batch_size, -1),
             self.terminals_ph: batch_dones.reshape(self.batch_size, -1),
-            self.learning_rate_ph: learning_rate,
-            self.q_disc_strength_ph: self.q_disc_strength_schedule(self.num_timesteps)
+            self.learning_rate_ph: learning_rate
         }
 
         if self.recurrent_policy:
