@@ -125,7 +125,7 @@ class ExponentialSchedule(Schedule):
 
     def __call__(self, *args, **kwargs):
         return self.value(*args, **kwargs)
-    
+
 
 def get_schedule_fn(value_schedule):
     """

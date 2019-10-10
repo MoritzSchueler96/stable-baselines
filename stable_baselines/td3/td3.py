@@ -180,16 +180,11 @@ class TD3(OffPolicyRLModel):
                 with tf.variable_scope("model", reuse=False):
                     # Create the policy
                     self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph)
-
                     # Use two Q-functions to improve performance by reducing overestimation bias
                     qf1, qf2 = self.policy_tf.make_critics(self.processed_obs_ph, self.actions_ph)
                     # Q value when following the current policy
                     qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph,
                                                             policy_out, reuse=True)
-
-                    if test:
-                        self.policy_test = policy_test = self.policy_tf.make_actor(self.processed_obs_ph, scope="pi_t")
-                        qf1_pi_t, _ = self.policy_tf.make_critics(self.processed_obs_ph, policy_test, reuse=True)
 
                 with tf.variable_scope("target", reuse=False):
                     # Create target networks
@@ -230,15 +225,7 @@ class TD3(OffPolicyRLModel):
                     action_loss = self.action_l2_scale * tf.nn.l2_loss(self.policy_out)
 
                     # Policy loss: maximise q value
-                    if test:
-                        self.q_disc_strength_ph = tf.placeholder(tf.float32, [], name="q_disc_strength_ph")
-                        self.q_disc_strength_schedule = ExponentialSchedule(int(1e5), 30, 0, rate=10)
-                        q_disc_loss = tf.reduce_mean(
-                            q_discrepancy)  # self.q_disc_strength_ph * tf.reduce_mean(q_discrepancy)
-                        self.policy_loss = policy_loss = -(rew_loss + q_disc_loss) + action_loss
-                    else:
-                        self.policy_loss = policy_loss = -rew_loss + action_loss
-
+                    self.policy_loss = policy_loss = -(rew_loss + q_disc_loss) + action_loss
 
                     # Policy train op
                     # will be called only every n training steps,
@@ -246,13 +233,6 @@ class TD3(OffPolicyRLModel):
                     policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
                     policy_train_op = policy_optimizer.minimize(policy_loss, var_list=tf_util.get_trainable_vars('model/pi'))
                     self.policy_train_op = policy_train_op
-
-                    if test:
-                        self.policy_loss_t = policy_loss_t = -tf.reduce_mean(qf1_pi_t)
-                        policy_optimizer_t = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
-                        policy_train_op_t = policy_optimizer_t.minimize(policy_loss_t, var_list=get_vars('model/pi_t'))
-                        self.policy_train_op_t = policy_train_op_t
-
                     # Q Values optimizer
                     qvalues_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
                     qvalues_params = tf_util.get_trainable_vars('model/values_fn/')
@@ -260,9 +240,6 @@ class TD3(OffPolicyRLModel):
                     # Q Values and policy target params
                     source_params = tf_util.get_trainable_vars("model/")
                     target_params = tf_util.get_trainable_vars("target/")
-
-                    if test:
-                        source_params = [param for param in source_params if "pi_t" not in param.name]
 
                     # Polyak averaging for target variables
                     self.target_ops = [
@@ -287,9 +264,6 @@ class TD3(OffPolicyRLModel):
                     tf.summary.scalar("rew_loss", rew_loss)
                     tf.summary.scalar("action_loss", action_loss)
                     tf.summary.scalar('policy_loss', policy_loss)
-                    if test:
-                        tf.summary.scalar("q_disc_loss", q_disc_loss)
-                        tf.summary.scalar("policy_loss_t", policy_loss_t)
                     tf.summary.scalar('qf1_loss', qf1_loss)
                     tf.summary.scalar('qf2_loss', qf2_loss)
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
@@ -336,10 +310,7 @@ class TD3(OffPolicyRLModel):
         step_ops = self.step_ops
         if update_policy:
             # Update policy and target networks
-            if test:
-                step_ops = step_ops + [self.policy_train_op, self.policy_train_op_t, self.target_ops, self.policy_loss, self.policy_loss_t]
-            else:
-                step_ops = step_ops + [self.policy_train_op, self.target_ops, self.policy_loss]
+            step_ops = step_ops + [self.policy_train_op, self.target_ops, self.policy_loss]
 
         # Do one gradient step
         # and optionally compute log for tensorboard
@@ -522,8 +493,7 @@ class TD3(OffPolicyRLModel):
                     mean_reward = round(float(np.mean(episode_rewards[-101:-1])), 1)
 
                 num_episodes = len(episode_rewards)
-<<<<<<< HEAD
-=======
+
                 self.num_timesteps += 1
 
                 if self.buffer_is_prioritized and \
@@ -532,7 +502,6 @@ class TD3(OffPolicyRLModel):
                         and self.num_timesteps >= self.prioritization_starts:
                     self._set_prioritized_buffer()
 
->>>>>>> add prioritized replay support and add rank based prioritized replay buffer
                 # Display training infos
                 if self.verbose >= 1 and done and log_interval is not None and len(episode_rewards) % log_interval == 0:
                     fps = int(step / (time.time() - start_time))
@@ -573,7 +542,7 @@ class TD3(OffPolicyRLModel):
         vectorized_env = self._is_vectorized_observation(observation, self.observation_space)
 
         observation = observation.reshape((-1,) + self.observation_space.shape)
-        actions = self.policy_tf.step(observation, test=deterministic)
+        actions = self.policy_tf.step(observation)
 
         if self.action_noise is not None and not deterministic:
             actions = np.clip(actions + self.action_noise(), -1, 1)
