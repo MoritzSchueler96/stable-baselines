@@ -4,6 +4,7 @@ from gym.spaces import Box
 
 from stable_baselines.common.policies import BasePolicy, nature_cnn, register_policy, cnn_1d_extractor
 from stable_baselines.sac.policies import mlp
+from stable_baselines.a2c.utils import lstm
 
 
 class TD3Policy(BasePolicy):
@@ -114,7 +115,6 @@ class FeedForwardPolicy(TD3Policy):
             layers = [64, 64]
         self.layers = layers
         self.obs_module_indices = obs_module_indices
-        self.policy_t = None
 
         assert len(layers) >= 1, "Error: must have at least one hidden layer for the policy."
 
@@ -126,27 +126,15 @@ class FeedForwardPolicy(TD3Policy):
 
         if self.obs_module_indices is not None:
             obs = tf.gather(obs, self.obs_module_indices["pi"], axis=-1)
+        with tf.variable_scope(scope, reuse=reuse):
+            if self.feature_extraction == "cnn":
+                pi_h = self.cnn_extractor(obs, name="pi_c1", act_fun=self.activ_fn, **self.cnn_kwargs)
+            else:
+                pi_h = tf.layers.flatten(obs)
 
-        if self.policy is not None:
-            with tf.variable_scope(scope, reuse=reuse):
-                if self.feature_extraction == "cnn":
-                    pi_h = self.cnn_extractor(obs, name="pi_c1", act_fun=self.activ_fn, **self.cnn_kwargs)
-                else:
-                    pi_h = tf.layers.flatten(obs)
+            pi_h = mlp(pi_h, self.layers, self.activ_fn, layer_norm=self.layer_norm)
 
-                pi_h = mlp(pi_h, self.layers, self.activ_fn, layer_norm=self.layer_norm)
-
-                self.policy_t = policy = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=tf.tanh)
-        else:
-            with tf.variable_scope(scope, reuse=reuse):
-                if self.feature_extraction == "cnn":
-                    pi_h = self.cnn_extractor(obs, name="pi_c1", act_fun=self.activ_fn, **self.cnn_kwargs)
-                else:
-                    pi_h = tf.layers.flatten(obs)
-
-                pi_h = mlp(pi_h, self.layers, self.activ_fn, layer_norm=self.layer_norm)
-
-                self.policy = policy = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=tf.tanh)
+            self.policy = policy = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=tf.tanh)
 
         return policy
 
@@ -183,15 +171,134 @@ class FeedForwardPolicy(TD3Policy):
 
         return self.qf1, self.qf2
 
-    def step(self, obs, state=None, mask=None, test=False):
-        if test:
-            return self.sess.run(self.policy_t, {self.obs_ph: obs})
+    def step(self, obs, state=None, mask=None):
         return self.sess.run(self.policy, {self.obs_ph: obs})
 
     def get_q_discrepancy(self, obs):
         if isinstance(obs, np.ndarray) and len(obs.shape) == 1: # TODO: check for MLP or CNN policy here
             obs = np.expand_dims(obs, axis=0)
         return self.sess.run(self.q_discrepancy, {self.obs_ph: obs})
+
+
+class RecurrentPolicy(TD3Policy):
+    """
+        Policy object that implements a DDPG-like actor critic, using a feed forward neural network.
+
+        :param sess: (TensorFlow session) The current TensorFlow session
+        :param ob_space: (Gym Space) The observation space of the environment
+        :param ac_space: (Gym Space) The action space of the environment
+        :param n_env: (int) The number of environments to run
+        :param n_steps: (int) The number of steps to run for each environment
+        :param n_batch: (int) The number of batch to run (n_envs * n_steps)
+        :param reuse: (bool) If the policy is reusable or not
+        :param layers: ([int]) The size of the Neural network for the policy (if None, default to [64, 64])
+        :param cnn_extractor: (function (TensorFlow Tensor, ``**kwargs``): (TensorFlow Tensor)) the CNN feature extraction
+        :param feature_extraction: (str) The feature extraction type ("cnn" or "mlp")
+        :param layer_norm: (bool) enable layer normalisation
+        :param act_fun: (tf.func) the activation function to use in the neural network.
+        :param kwargs: (dict) Extra keyword arguments for the nature CNN feature extraction
+        """
+
+    def __init__(self, sess, ob_space, ac_space, n_env=1, n_steps=1, n_batch=None, reuse=False, layers=None,
+                 cnn_extractor=nature_cnn, feature_extraction="cnn",
+                 layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
+        super(RecurrentPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch,
+                                                reuse=reuse,
+                                                scale=(feature_extraction == "cnn" and cnn_extractor == nature_cnn))
+
+        self._kwargs_check(feature_extraction, kwargs)
+        self.layer_norm = layer_norm
+        self.feature_extraction = feature_extraction
+        self.cnn_kwargs = kwargs
+        self.cnn_extractor = cnn_extractor
+        self.cnn_vf = self.cnn_kwargs.pop("cnn_vf", True)
+        self.reuse = reuse
+        if layers is None:
+            layers = [64, 64]
+        self.layers = layers
+        self.obs_module_indices = obs_module_indices
+
+        assert len(layers) >= 1, "Error: must have at least one hidden layer for the policy."
+
+        self.activ_fn = act_fun
+
+        with tf.variable_scope("input", reuse=False):
+            self.dones_ph = tf.placeholder(tf.float32, (None,), name="dones_ph")  # (done t-1)
+            self.pi_state_ph = tf.placeholder(tf.float32, (None, 128), name="pi_state_ph")
+            self.qf1_state_ph = tf.placeholder(tf.float32, (None, 128), name="qf1_state_ph")
+            self.qf2_state_ph = tf.placeholder(tf.float32, (None, 128), name="qf2_state_ph")
+
+        self.pi_initial_state = np.zeros((128,), dtype=np.float32)
+        self.qf1_initial_state = np.zeros((128,), dtype=np.float32)
+        self.qf2_initial_state = np.zeros((128,), dtype=np.float32)
+
+        self.pi_state = None
+        self.qf1_state = None
+        self.qf2_state = None
+
+    def make_actor(self, obs=None, goal=None, prev_action=None, reuse=False, scope="pi"):
+        if obs is None:
+            obs = self.processed_obs
+
+        if self.obs_module_indices is not None:
+            obs = tf.gather(obs, self.obs_module_indices["pi"], axis=-1)
+        with tf.variable_scope(scope, reuse=reuse):
+            if self.feature_extraction == "cnn":
+                pi_h = self.cnn_extractor(obs, name="pi_c1", act_fun=self.activ_fn, **self.cnn_kwargs)
+            else:
+                pi_h = tf.layers.flatten(obs)
+
+            ff_branch = tf.concat([pi_h, goal], axis=-1)
+            ff_branch = mlp(ff_branch, [128], self.activ_fn, self.layer_norm)
+
+            lstm_branch = tf.concat([pi_h, prev_action], axis=-1)
+            lstm_branch = mlp(lstm_branch, [128], self.activ_fn, self.layer_norm)
+            lstm_branch, self.pi_state = lstm(lstm_branch, self.dones_ph, self.pi_state_ph, 'lstm_pi', n_hidden=128,
+                                         layer_norm=self.layer_norm)
+            head = tf.concat([ff_branch, lstm_branch], axis=-1)
+            head = mlp(head, [128, 128], self.activ_fn, self.layer_norm)
+
+            self.policy = policy = tf.layers.dense(head, self.ac_space.shape[0], activation=tf.tanh)
+
+        return policy
+
+    def make_critics(self, obs=None, action=None, goal=None, my=None, prev_action=None, reuse=False, scope="values_fn"):
+        if obs is None:
+            obs = self.processed_obs
+
+        if self.obs_module_indices is not None:
+            obs = tf.gather(obs, self.obs_module_indices["vf"], axis=-1)
+
+        with tf.variable_scope(scope, reuse=reuse):
+            if self.feature_extraction == "cnn" and self.cnn_vf:
+                critics_h = self.cnn_extractor(obs, name="vf_c1", act_fun=self.activ_fn, **self.cnn_kwargs)
+            else:
+                critics_h = tf.layers.flatten(obs)
+
+            # Concatenate preprocessed state and action
+            ff_branch_in = tf.concat([critics_h, action, goal, my], axis=-1)
+            lstm_branch_in = tf.concat([critics_h, prev_action], axis=-1)
+
+            self.qf1, self.qf2 = None, None
+            self.qf1_state, self.qf2_state = None, None
+
+            # Double Q values to reduce overestimation
+            for i in range(2):
+                with tf.variable_scope('qf{}'.format(i), reuse=reuse):
+                    ff_branch = mlp(ff_branch_in, [128], self.activ_fn, layer_norm=self.layer_norm)
+                    lstm_branch = mlp(lstm_branch_in, [128], self.activ_fn, self.layer_norm)
+                    lstm_branch, q_state = lstm(lstm_branch, self.dones_ph, getattr(self, "qf{}_state_ph".format(i)),
+                                                "lstm_qf{}".format(i), n_hidden=128, layer_norm=self.layer_norm)
+                    setattr(self, "qf{}_state".format(i), q_state)
+                    head = tf.concat([ff_branch, lstm_branch], axis=-1)
+                    head = mlp(head, [128, 128], self.activ_fn, self.layer_norm)
+                    setattr(self, "qf{}".format(i), tf.layers.dense(head, 1, name="qf{}".format(i)))
+
+        return self.qf1, self.qf2
+
+    def step(self, obs, state=None, mask=None):
+        return self.sess.run([self.policy, self.pi_state],
+                        {self.obs_ph: obs, self.pi_state_ph: state, self.dones_ph: mask})
 
 
 class CnnPolicy(FeedForwardPolicy):

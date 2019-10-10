@@ -14,11 +14,11 @@ from stable_baselines.common.vec_env import VecEnv
 from stable_baselines.deepq.replay_buffer import ReplayBuffer, DiscrepancyReplayBuffer, StableReplayBuffer, PrioritizedReplayBuffer
 from stable_baselines.ppo2.ppo2 import safe_mean, get_schedule_fn
 from stable_baselines.sac.sac import get_vars
-from stable_baselines.td3.policies import TD3Policy
+from stable_baselines.td3.policies import TD3Policy, RecurrentPolicy
 from stable_baselines import logger
 from stable_baselines.common.schedules import ExponentialSchedule
 
-test = False
+
 class TD3(OffPolicyRLModel):
     """
     Twin Delayed DDPG (TD3)
@@ -121,6 +121,18 @@ class TD3(OffPolicyRLModel):
         self.policy_train_op = None
         self.policy_loss = None
 
+        self.recurrent_policy = isinstance(self.policy, RecurrentPolicy)
+        if self.recurrent_policy:
+            self.goal_ph = None
+            self.actions_prev_ph = None
+            self.my_ph = None
+            self.pi_state_ph = None
+            self.qf1_state_ph = None
+            self.qf2_state_ph = None
+            self.pi_state = None
+            self.qf1_state = None
+            self.qf2_state = None
+
         self.active_sampling = False
 
         if _init_setup_model:
@@ -177,31 +189,56 @@ class TD3(OffPolicyRLModel):
                                                      name='actions')
                     self.learning_rate_ph = tf.placeholder(tf.float32, [], name="learning_rate_ph")
 
+                    if self.recurrent_policy:
+                        self.pi_state_ph = self.policy_tf.pi_state_ph
+                        self.qf1_state_ph = self.policy_tf.qf1_state_ph
+                        self.qf2_state_ph = self.policy_tf.qf2_state_ph
+
                 with tf.variable_scope("model", reuse=False):
                     # Create the policy
-                    self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph)
-
-                    # Use two Q-functions to improve performance by reducing overestimation bias
-                    qf1, qf2 = self.policy_tf.make_critics(self.processed_obs_ph, self.actions_ph)
-                    # Q value when following the current policy
-                    qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph,
-                                                            policy_out, reuse=True)
-
-                    if test:
-                        self.policy_test = policy_test = self.policy_tf.make_actor(self.processed_obs_ph, scope="pi_t")
-                        qf1_pi_t, _ = self.policy_tf.make_critics(self.processed_obs_ph, policy_test, reuse=True)
+                    if self.recurrent_policy:
+                        self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph, self.goal_ph,
+                                                                                 self.actions_prev_ph)
+                        # Use two Q-functions to improve performance by reducing overestimation bias
+                        qf1, qf2 = self.policy_tf.make_critics(self.processed_obs_ph, self.actions_ph, self.goal_ph,
+                                                               self.my_ph, self.actions_prev_ph)
+                        # Q value when following the current policy
+                        qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph, policy_out, self.goal_ph,
+                                                                     self.my_ph, self.actions_prev_ph, reuse=True)
+                    else:
+                        self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph)
+                        # Use two Q-functions to improve performance by reducing overestimation bias
+                        qf1, qf2 = self.policy_tf.make_critics(self.processed_obs_ph, self.actions_ph)
+                        # Q value when following the current policy
+                        qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph,
+                                                                policy_out, reuse=True)
 
                 with tf.variable_scope("target", reuse=False):
-                    # Create target networks
-                    target_policy_out = self.target_policy_tf.make_actor(self.processed_next_obs_ph)
-                    # Target policy smoothing, by adding clipped noise to target actions
-                    target_noise = tf.random_normal(tf.shape(target_policy_out), stddev=self.target_policy_noise)
-                    target_noise = tf.clip_by_value(target_noise, -self.target_noise_clip, self.target_noise_clip)
-                    # Clip the noisy action to remain in the bounds [-1, 1] (output of a tanh)
-                    noisy_target_action = tf.clip_by_value(target_policy_out + target_noise, -1, 1)
-                    # Q values when following the target policy
-                    qf1_target, qf2_target = self.target_policy_tf.make_critics(self.processed_next_obs_ph,
-                                                                                noisy_target_action)
+                    if self.recurrent_policy:
+                        # Create target networks
+                        target_policy_out = self.target_policy_tf.make_actor(self.processed_next_obs_ph, self.goal_ph,
+                                                                             self.actions_prev_ph)
+                        # Target policy smoothing, by adding clipped noise to target actions
+                        target_noise = tf.random_normal(tf.shape(target_policy_out), stddev=self.target_policy_noise)
+                        target_noise = tf.clip_by_value(target_noise, -self.target_noise_clip, self.target_noise_clip)
+                        # Clip the noisy action to remain in the bounds [-1, 1] (output of a tanh)
+                        noisy_target_action = tf.clip_by_value(target_policy_out + target_noise, -1, 1)
+                        # Q values when following the target policy
+                        qf1_target, qf2_target = self.target_policy_tf.make_critics(self.processed_next_obs_ph,
+                                                                                    noisy_target_action,
+                                                                                    self.goal_ph, self.my_ph,
+                                                                                    self.actions_prev_ph)
+                    else:
+                        # Create target networks
+                        target_policy_out = self.target_policy_tf.make_actor(self.processed_next_obs_ph)
+                        # Target policy smoothing, by adding clipped noise to target actions
+                        target_noise = tf.random_normal(tf.shape(target_policy_out), stddev=self.target_policy_noise)
+                        target_noise = tf.clip_by_value(target_noise, -self.target_noise_clip, self.target_noise_clip)
+                        # Clip the noisy action to remain in the bounds [-1, 1] (output of a tanh)
+                        noisy_target_action = tf.clip_by_value(target_policy_out + target_noise, -1, 1)
+                        # Q values when following the target policy
+                        qf1_target, qf2_target = self.target_policy_tf.make_critics(self.processed_next_obs_ph,
+                                                                                    noisy_target_action)
 
                 with tf.variable_scope("loss", reuse=False):
                     # Take the min of the two target Q-Values (clipped Double-Q Learning)
@@ -226,19 +263,11 @@ class TD3(OffPolicyRLModel):
                     qvalues_losses = qf1_loss + qf2_loss
 
                     rew_loss = tf.reduce_mean(qf1_pi)
-
+                    q_disc_loss = tf.reduce_mean(q_discrepancy)#self.q_disc_strength_ph * tf.reduce_mean(q_discrepancy)
                     action_loss = self.action_l2_scale * tf.nn.l2_loss(self.policy_out)
 
                     # Policy loss: maximise q value
-                    if test:
-                        self.q_disc_strength_ph = tf.placeholder(tf.float32, [], name="q_disc_strength_ph")
-                        self.q_disc_strength_schedule = ExponentialSchedule(int(1e5), 30, 0, rate=10)
-                        q_disc_loss = tf.reduce_mean(
-                            q_discrepancy)  # self.q_disc_strength_ph * tf.reduce_mean(q_discrepancy)
-                        self.policy_loss = policy_loss = -(rew_loss + q_disc_loss) + action_loss
-                    else:
-                        self.policy_loss = policy_loss = -rew_loss + action_loss
-
+                    self.policy_loss = policy_loss = -rew_loss + action_loss
 
                     # Policy train op
                     # will be called only every n training steps,
@@ -247,12 +276,6 @@ class TD3(OffPolicyRLModel):
                     policy_train_op = policy_optimizer.minimize(policy_loss, var_list=get_vars('model/pi'))
                     self.policy_train_op = policy_train_op
 
-                    if test:
-                        self.policy_loss_t = policy_loss_t = -tf.reduce_mean(qf1_pi_t)
-                        policy_optimizer_t = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
-                        policy_train_op_t = policy_optimizer_t.minimize(policy_loss_t, var_list=get_vars('model/pi_t'))
-                        self.policy_train_op_t = policy_train_op_t
-
                     # Q Values optimizer
                     qvalues_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
                     qvalues_params = get_vars('model/values_fn/')
@@ -260,9 +283,6 @@ class TD3(OffPolicyRLModel):
                     # Q Values and policy target params
                     source_params = get_vars("model/")
                     target_params = get_vars("target/")
-
-                    if test:
-                        source_params = [param for param in source_params if "pi_t" not in param.name]
 
                     # Polyak averaging for target variables
                     self.target_ops = [
@@ -285,11 +305,9 @@ class TD3(OffPolicyRLModel):
 
                     # Monitor losses and entropy in tensorboard
                     tf.summary.scalar("rew_loss", rew_loss)
+                    tf.summary.scalar("q_disc_loss", q_disc_loss)
                     tf.summary.scalar("action_loss", action_loss)
                     tf.summary.scalar('policy_loss', policy_loss)
-                    if test:
-                        tf.summary.scalar("q_disc_loss", q_disc_loss)
-                        tf.summary.scalar("policy_loss_t", policy_loss_t)
                     tf.summary.scalar('qf1_loss', qf1_loss)
                     tf.summary.scalar('qf2_loss', qf2_loss)
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
@@ -312,6 +330,10 @@ class TD3(OffPolicyRLModel):
             batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, batch_weights, batch_idxs = batch
             if len(batch_weights.shape) == 1:
                 batch_weights = np.expand_dims(batch_weights, axis=1)
+        elif self.recurrent_policy:
+            batch = self.replay_buffer.sample(self.batch_size)
+            batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, batch_actions_prev, batch_goals, \
+                batch_my = batch
         else:
             batch = self.replay_buffer.sample(self.batch_size)
             batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
@@ -327,8 +349,12 @@ class TD3(OffPolicyRLModel):
             self.learning_rate_ph: learning_rate
         }
 
-        if test:
-            feed_dict[self.q_disc_strength_ph] = self.q_disc_strength_schedule(self.num_timesteps)
+        if self.recurrent_policy:
+            feed_dict.update({
+                self.my_ph: batch_my,
+                self.goal_ph: batch_goals,
+                self.actions_prev_ph: batch_prev_actions
+            })
 
         if self.buffer_is_prioritized:
             feed_dict[self.is_weights_ph] = batch_weights
@@ -336,10 +362,7 @@ class TD3(OffPolicyRLModel):
         step_ops = self.step_ops
         if update_policy:
             # Update policy and target networks
-            if test:
-                step_ops = step_ops + [self.policy_train_op, self.policy_train_op_t, self.target_ops, self.policy_loss, self.policy_loss_t]
-            else:
-                step_ops = step_ops + [self.policy_train_op, self.target_ops, self.policy_loss]
+            step_ops = step_ops + [self.policy_train_op, self.target_ops, self.policy_loss]
 
         # Do one gradient step
         # and optionally compute log for tensorboard
@@ -400,6 +423,10 @@ class TD3(OffPolicyRLModel):
                     and self.num_timesteps >= self.prioritization_starts:
                 self._set_prioritized_buffer()
 
+            if self.recurrent_policy:
+                done = False
+                self.pi_state = self.policy_tf.initial_state
+
             for step in range(initial_step, total_timesteps):
                 if callback is not None:
                     # Only stop training if return value is False, not when it is None. This is for backwards
@@ -416,7 +443,10 @@ class TD3(OffPolicyRLModel):
                     # No need to rescale when sampling random action
                     rescaled_action = action = self.env.action_space.sample()
                 else:
-                    action = self.policy_tf.step(obs[None]).flatten()
+                    if self.recurrent_policy:
+                        action, self.pi_state = self.policy_tf.step(obs, state=self.pi_state, mask=np.array(done))
+                    else:
+                        action = self.policy_tf.step(obs[None]).flatten()
                     # Add noise to the action, as the policy
                     # is deterministic, this is required for exploration
                     if self.action_noise is not None:
@@ -545,7 +575,7 @@ class TD3(OffPolicyRLModel):
         vectorized_env = self._is_vectorized_observation(observation, self.observation_space)
 
         observation = observation.reshape((-1,) + self.observation_space.shape)
-        actions = self.policy_tf.step(observation, test=deterministic)
+        actions = self.policy_tf.step(observation)
 
         if self.action_noise is not None and not deterministic:
             actions = np.clip(actions + self.action_noise(), -1, 1)
