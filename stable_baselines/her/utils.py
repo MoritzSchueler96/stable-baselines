@@ -63,7 +63,6 @@ class HERGoalEnvWrapper(object):
         else:
             raise NotImplementedError("{} space is not supported".format(type(self.spaces[0])))
 
-
     def convert_dict_to_obs(self, obs_dict):
         """
         :param obs_dict: (dict<np.ndarray>)
