@@ -163,7 +163,7 @@ class HindsightExperienceReplayWrapper(object):
         """
         # For each transition in the last episode,
         # create a set of artificial transitions
-        if isinstance(self.replay_buffer, StableReplayBuffer) or self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
+        if self.replay_buffer.__name__ == "StableReplayBuffer" or self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
             achieved_goal_changes = []
             achieved_goals = []
             for transition_idx, transition in enumerate(self.episode_transitions):
@@ -191,8 +191,10 @@ class HindsightExperienceReplayWrapper(object):
             obs_t, action, reward, obs_tp1, done = transition
 
             # Add to the replay buffer
-            if isinstance(self.replay_buffer, StableReplayBuffer):
+            if self.replay_buffer.__name__ == "StableReplayBuffer":
                 self.replay_buffer.add(obs_t, action, reward, obs_tp1, done, tot_achieved_goal_changes)
+            elif self.replay_buffer.__name__ == "DRRecurrentReplayBuffer":
+                self.replay_buffer.add()
             else:
                 self.replay_buffer.add(obs_t, action, reward, obs_tp1, done)
 
@@ -237,7 +239,9 @@ class HindsightExperienceReplayWrapper(object):
                 obs, next_obs = map(self.env.convert_dict_to_obs, (obs_dict, next_obs_dict))
 
                 # Add artificial transition to the replay buffer
-                if isinstance(self.replay_buffer, StableReplayBuffer):
+                if self.replay_buffer.__name__ == "StableReplayBuffer":
                     self.replay_buffer.add(obs, action, reward, next_obs, done, tot_achieved_goal_changes)
+                elif self.replay_buffer.__name__ == "DRRecurrentReplayBuffer":
+                    self.replay_buffer.add_her(goal, reward, transition_idx)
                 else:
                     self.replay_buffer.add(obs, action, reward, next_obs, done)

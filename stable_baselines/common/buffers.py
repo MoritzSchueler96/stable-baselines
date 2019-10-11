@@ -143,6 +143,124 @@ class ReplayBuffer(object):
         idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]
         return self._encode_sample(idxes, env=env)
 
+# TODO: add for dynamics randomization which also takes in my, and support for HER?
+class RecurrentReplayBuffer(ReplayBuffer):
+    __name__ = "RecurrentReplayBuffer"
+
+    def __init__(self, size, episode_max_len, scan_length):
+        super(RecurrentReplayBuffer, self).__init__(size)
+        self._current_episode_data = []
+        self._maxsize = self._maxsize // episode_max_len
+        self._scan_length = scan_length
+        #self._optim_length = optim_length # TODO: optim length
+
+    def add(self, obs_t, action, reward, obs_tp1, done):
+        data = (obs_t, action, reward, obs_tp1, done)
+        self._current_episode_data.append(data)
+        if done:
+            if self._next_idx >= len(self._storage):
+                self._storage.append(self._current_episode_data)
+            else:
+                self._storage[self._next_idx] = self._current_episode_data
+            self._next_idx = (self._next_idx + 1) % self._maxsize
+            self._current_episode_data = []
+
+    def __len__(self):
+        return sum([len(episode) for episode in self.storage])
+
+    def sample(self, batch_size, **_kwargs):
+        num_episodes = len(self._storage)
+        if num_episodes >= batch_size:
+            ep_idxes = random.sample(range(num_episodes), k=batch_size)
+        else:
+            ep_idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]
+        ep_ts = [random.randint(0, len(self._storage[ep_i])) for ep_i in ep_idxes]  # - self._optim_length)
+        return self._encode_sample(ep_idxes, ep_ts)
+
+    def _encode_sample(self, ep_idxes, ep_ts):
+        obses_t, actions, rewards, obses_tp1, dones, hists = [], [], [], [], [], []
+        for i in ep_idxes:
+            ep_data = self._storage[i]
+            obs_t, action, reward, obs_tp1, done = ep_data[ep_ts[i]]
+            ep_scan_start = ep_ts[i] - self._scan_length if ep_ts[i] - self._scan_length >= 0 else 0
+            hist = [ep_data_h[0] for ep_data_h in ep_data[ep_scan_start:ep_ts[i]]]
+            obses_t.append(np.array(obs_t, copy=False))
+            actions.append(np.array(action, copy=False))
+            rewards.append(reward)
+            obses_tp1.append(np.array(obs_tp1, copy=False))
+            dones.append(done)
+            hists.append(np.array(hist, copy=False))
+        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), hists
+
+
+class DRRecurrentReplayBuffer(RecurrentReplayBuffer):
+    __name__ = "DRRecurrentReplayBuffer"
+
+    def __init__(self, size, episode_max_len, scan_length, her_k=4):
+        self.her_k = her_k
+        super(DRRecurrentReplayBuffer, self).__init__(size, episode_max_len, scan_length)
+        self._episode_my = []
+
+    def add(self, obs_t, action, reward, obs_tp1, done, goal, my=None):
+        assert not (done and my is None)
+
+        if self.her_k > 0:
+            goal = [goal]
+            reward = [reward]
+        data = (obs_t, action, reward, obs_tp1, done, goal)
+        self._current_episode_data.append(data)
+        if done:
+            if self._next_idx >= len(self._storage):
+                self._storage.append(self._current_episode_data)
+                self._episode_my.append(my)
+            else:
+                self._storage[self._next_idx] = self._current_episode_data
+                self._episode_my[self._next_idx] = my
+            self._next_idx = (self._next_idx + 1) % self._maxsize
+            self._current_episode_data = []
+
+    def add_her(self, goal, reward, timestep, ep_index=-1):
+        assert self.her_k > 0
+        episode_data = self._storage[ep_index]
+        episode_data[timestep][5].append(goal)
+        episode_data[timestep][2].append(reward)
+
+    def sample(self, batch_size, **_kwargs):
+        if self.her_k > 0:
+            num_episodes = len(self._storage)
+            if num_episodes >= batch_size:
+                ep_idxes = random.sample(range(num_episodes), k=batch_size)
+            else:
+                ep_idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]
+            ep_ts = [random.randint(0, len(self._storage[ep_i]) * self.her_k) for ep_i in ep_idxes]  # - self._optim_length)
+            return self._encode_sample(ep_idxes, ep_ts)
+        else:
+            return super(DRRecurrentReplayBuffer, self).sample(batch_size)
+
+    def _encode_sample(self, ep_idxes, ep_ts):
+        obses_t, actions, rewards, obses_tp1, dones, goals, mys, hists = [], [], [], [], [], [], [], []
+        for i in ep_idxes:
+            if self.her_k > 0:
+                ep_t = int(ep_ts[i] / self.her_k)
+            else:
+                ep_t = ep_ts[i]
+            ep_data = self._storage[i]
+            obs_t, action, reward, obs_tp1, done, goal = ep_data[ep_t]
+            if self.her_k > 0:
+                goal = goal[ep_ts[i] - ep_t * self.her_k]
+                reward = reward[ep_ts[i] - ep_t * self.her_k]
+            ep_scan_start = ep_t - self._scan_length if ep_t - self._scan_length >= 0 else 0
+            hist = [ep_data_h[0] for ep_data_h in ep_data[ep_scan_start:ep_t]]
+            obses_t.append(np.array(obs_t, copy=False))
+            actions.append(np.array(action, copy=False))
+            rewards.append(reward)
+            obses_tp1.append(np.array(obs_tp1, copy=False))
+            dones.append(done)
+            hists.append(np.array(hist, copy=False))
+            goal.append(np.array(goal, copy=False))
+            mys.append(np.array(self._episode_my[i], copy=False))
+        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), np.array(goals), hists, np.array(mys)
+
 
 class PrioritizedReplayBuffer(ReplayBuffer):
     __name__ = "PrioritizedReplayBuffer"
@@ -357,6 +475,8 @@ class DiscrepancyReplayBuffer(ReplayBuffer):
 
 
 class StableReplayBuffer(ReplayBuffer):
+    __name__ = "StableReplayBuffer"
+
     def __init__(self, size):
         """
         Create Prioritized Replay buffer.

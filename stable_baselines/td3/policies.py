@@ -222,9 +222,12 @@ class RecurrentPolicy(TD3Policy):
 
         with tf.variable_scope("input", reuse=False):
             self.dones_ph = tf.placeholder(tf.float32, (None,), name="dones_ph")  # (done t-1)
+            self.goal_ph = tf.placeholder(tf.float32, (None, 3), name="goal_ph")
+            self.action_prev_ph = tf.placeholder(tf.float32, (None, 3), name="action_prev_ph")
             self.pi_state_ph = tf.placeholder(tf.float32, (None, 128), name="pi_state_ph")
             self.qf1_state_ph = tf.placeholder(tf.float32, (None, 128), name="qf1_state_ph")
             self.qf2_state_ph = tf.placeholder(tf.float32, (None, 128), name="qf2_state_ph")
+            self.my_ph = tf.placeholder(tf.float32, (None, 10), name="my_ph")  # the dynamics of the environment
 
         self._initial_state = np.zeros((128,), dtype=np.float32)
 
@@ -232,9 +235,13 @@ class RecurrentPolicy(TD3Policy):
         self.qf1_state = None
         self.qf2_state = None
 
-    def make_actor(self, obs=None, goal=None, prev_action=None, reuse=False, scope="pi"):
+    def make_actor(self, obs=None, goal=None, action_prev=None, reuse=False, scope="pi"):
         if obs is None:
             obs = self.processed_obs
+        if goal is None:
+            goal = self.goal_ph
+        if action_prev is None:
+            action_prev = self.action_prev_ph
 
         if self.obs_module_indices is not None:
             obs = tf.gather(obs, self.obs_module_indices["pi"], axis=-1)
@@ -247,7 +254,7 @@ class RecurrentPolicy(TD3Policy):
             ff_branch = tf.concat([pi_h, goal], axis=-1)
             ff_branch = mlp(ff_branch, [128], self.activ_fn, self.layer_norm)
 
-            lstm_branch = tf.concat([pi_h, prev_action], axis=-1)
+            lstm_branch = tf.concat([pi_h, action_prev], axis=-1)
             lstm_branch = mlp(lstm_branch, [128], self.activ_fn, self.layer_norm)
             lstm_branch, self.pi_state = lstm(lstm_branch, self.dones_ph, self.pi_state_ph, 'lstm_pi', n_hidden=128,
                                          layer_norm=self.layer_norm)
@@ -258,9 +265,15 @@ class RecurrentPolicy(TD3Policy):
 
         return policy
 
-    def make_critics(self, obs=None, action=None, goal=None, my=None, prev_action=None, reuse=False, scope="values_fn"):
+    def make_critics(self, obs=None, action=None, goal=None, my=None, action_prev=None, reuse=False, scope="values_fn"):
         if obs is None:
             obs = self.processed_obs
+        if goal is None:
+            goal = self.goal_ph
+        if action_prev is None:
+            action_prev = self.action_prev_ph
+        if my is None:
+            my = self.my_ph
 
         if self.obs_module_indices is not None:
             obs = tf.gather(obs, self.obs_module_indices["vf"], axis=-1)
@@ -273,7 +286,7 @@ class RecurrentPolicy(TD3Policy):
 
             # Concatenate preprocessed state and action
             ff_branch_in = tf.concat([critics_h, action, goal, my], axis=-1)
-            lstm_branch_in = tf.concat([critics_h, prev_action], axis=-1)
+            lstm_branch_in = tf.concat([critics_h, action_prev], axis=-1)
 
             self.qf1, self.qf2 = None, None
             self.qf1_state, self.qf2_state = None, None
@@ -292,9 +305,15 @@ class RecurrentPolicy(TD3Policy):
 
         return self.qf1, self.qf2
 
-    def step(self, obs, state=None, mask=None):
+    def step(self, obs, state=None, goal=None, action_prev=None, mask=None):
         return self.sess.run([self.policy, self.pi_state],
-                        {self.obs_ph: obs, self.pi_state_ph: state, self.dones_ph: mask})
+                        {self.obs_ph: obs, self.goal_ph: goal, self.pi_state_ph: state, self.dones_ph: mask})
+
+    def update_q_states(self, h):
+        pass
+
+    def update_pi_state(self, h):
+        pass
 
 
 class RecurrentActorCriticPolicy(ActorCriticPolicy):
