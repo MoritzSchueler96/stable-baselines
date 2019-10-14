@@ -4,7 +4,7 @@ from gym.spaces import Box
 
 from stable_baselines.common.policies import BasePolicy, nature_cnn, register_policy, cnn_1d_extractor
 from stable_baselines.sac.policies import mlp
-from stable_baselines.a2c.utils import lstm
+from stable_baselines.a2c.utils import lstm, batch_to_seq, seq_to_batch
 
 
 class TD3Policy(BasePolicy):
@@ -198,9 +198,10 @@ class RecurrentPolicy(TD3Policy):
         :param act_fun: (tf.func) the activation function to use in the neural network.
         :param kwargs: (dict) Extra keyword arguments for the nature CNN feature extraction
         """
+    recurrent = True
 
     def __init__(self, sess, ob_space, ac_space, n_env=1, n_steps=1, n_batch=None, reuse=False, layers=None,
-                 cnn_extractor=nature_cnn, feature_extraction="cnn",
+                 cnn_extractor=nature_cnn, feature_extraction="mlp",
                  layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
         super(RecurrentPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch,
                                                 reuse=reuse,
@@ -222,46 +223,56 @@ class RecurrentPolicy(TD3Policy):
 
         self.activ_fn = act_fun
 
-        with tf.variable_scope("input", reuse=False):
-            self.dones_ph = tf.placeholder(tf.float32, (None,), name="dones_ph")  # (done t-1)
-            self.goal_ph = tf.placeholder(tf.float32, (None, 3), name="goal_ph")
-            self.action_prev_ph = tf.placeholder(tf.float32, (None, 3), name="action_prev_ph")
-            self.pi_state_ph = tf.placeholder(tf.float32, (None, 128), name="pi_state_ph")
-            self.qf1_state_ph = tf.placeholder(tf.float32, (None, 128), name="qf1_state_ph")
-            self.qf2_state_ph = tf.placeholder(tf.float32, (None, 128), name="qf2_state_ph")
-            self.my_ph = tf.placeholder(tf.float32, (None, 10), name="my_ph")  # the dynamics of the environment
+        batch_size = 100
+        lstm_units = 128
 
-        self.pi_initial_state = np.zeros((128,), dtype=np.float32)
-        self.qf1_initial_state = np.zeros((128,), dtype=np.float32)
-        self.qf2_initial_state = np.zeros((128,), dtype=np.float32)
+        with tf.variable_scope("input", reuse=False):
+            self.dones_ph = tf.placeholder(tf.float32, (batch_size,), name="dones_ph")  # (done t-1)
+            self.goal_ph = tf.placeholder(tf.float32, (batch_size, 3), name="goal_ph")
+            self.action_prev_ph = tf.placeholder(tf.float32, (batch_size, 3), name="action_prev_ph")
+            self.pi_state_ph = tf.placeholder(tf.float32, (1, lstm_units * 2), name="pi_state_ph")
+            self.qf1_state_ph = tf.placeholder(tf.float32, (1, lstm_units * 2), name="qf1_state_ph")
+            self.qf2_state_ph = tf.placeholder(tf.float32, (1, lstm_units * 2), name="qf2_state_ph")
+            self.my_ph = tf.placeholder(tf.float32, (batch_size, 10), name="my_ph")  # the dynamics of the environment
+            self.obs_rnn_ph = tf.placeholder(tf.float32, shape=self.processed_obs.shape, name="obs_rnn_ph")
+
+        self.pi_initial_state = np.zeros((1, lstm_units * 2), dtype=np.float32)
+        self.qf1_initial_state = np.zeros((1, lstm_units * 2), dtype=np.float32)
+        self.qf2_initial_state = np.zeros((1, lstm_units * 2), dtype=np.float32)
 
         self.pi_state = None
         self.qf1_state = None
         self.qf2_state = None
 
-    def make_actor(self, obs=None, goal=None, action_prev=None, reuse=False, scope="pi"):
-        if obs is None:
-            obs = self.processed_obs
+    def make_actor(self, obs_ff=None, goal=None, obs_rnn=None, action_rnn=None, reuse=False, scope="pi"):
+        if obs_ff is None:
+            obs_ff = self.processed_obs
+        if obs_rnn is None:
+            obs_rnn = self.processed_obs
         if goal is None:
             goal = self.goal_ph
-        if action_prev is None:
-            action_prev = self.action_prev_ph
+        if action_rnn is None:
+            action_rnn = self.action_prev_ph
 
-        if self.obs_module_indices is not None:
-            obs = tf.gather(obs, self.obs_module_indices["pi"], axis=-1)
+        #if self.obs_module_indices is not None:
+        #    obs = tf.gather(obs, self.obs_module_indices["pi"], axis=-1)
         with tf.variable_scope(scope, reuse=reuse):
-            if self.feature_extraction == "cnn":
-                pi_h = self.cnn_extractor(obs, name="pi_c1", act_fun=self.activ_fn, **self.cnn_kwargs)
-            else:
-                pi_h = tf.layers.flatten(obs)
+            #if self.feature_extraction == "cnn":
+            #    pi_h = self.cnn_extractor(obs, name="pi_c1", act_fun=self.activ_fn, **self.cnn_kwargs)
+            #else:
+            pi_h_ff = tf.layers.flatten(obs_ff)
+            pi_h_lstm = tf.layers.flatten(obs_rnn)
 
-            ff_branch = tf.concat([pi_h, goal], axis=-1)
-            ff_branch = mlp(ff_branch, [128], self.activ_fn, self.layer_norm)
+            ff_branch = tf.concat([pi_h_ff, goal], axis=-1)
+            ff_branch = self.activ_fn(tf.layers.dense(ff_branch, 128, name="ff_fc0"))
 
-            lstm_branch = tf.concat([pi_h, action_prev], axis=-1)
-            lstm_branch = mlp(lstm_branch, [128], self.activ_fn, self.layer_norm)
-            lstm_branch, self.pi_state = lstm(lstm_branch, self.dones_ph, self.pi_state_ph, 'lstm_pi', n_hidden=128,
+            lstm_branch = tf.concat([pi_h_lstm, action_rnn], axis=-1)
+            lstm_branch = self.activ_fn(tf.layers.dense(lstm_branch, 128, name="rnn_fc0"))
+            lstm_branch = batch_to_seq(lstm_branch, 100, 1)
+            masks = batch_to_seq(self.dones_ph, 100, 1)
+            lstm_branch, self.pi_state = lstm(lstm_branch, masks, self.pi_state_ph, 'lstm_pi', n_hidden=128,
                                          layer_norm=self.layer_norm)
+            lstm_branch = seq_to_batch(lstm_branch)
             head = tf.concat([ff_branch, lstm_branch], axis=-1)
             head = mlp(head, [128, 128], self.activ_fn, self.layer_norm)
 
@@ -269,55 +280,58 @@ class RecurrentPolicy(TD3Policy):
 
         return policy
 
-    def make_critics(self, obs=None, action=None, goal=None, my=None, action_prev=None, reuse=False, scope="values_fn"):
-        if obs is None:
-            obs = self.processed_obs
+    def make_critics(self, obs_ff=None, action_ff=None, goal=None, my=None, obs_rnn=None, action_rnn=None, reuse=False, scope="values_fn"):
+        if obs_ff is None:
+            obs_ff = self.processed_obs
+        if obs_rnn is None:
+            obs_rnn = self.processed_obs
         if goal is None:
             goal = self.goal_ph
-        if action_prev is None:
-            action_prev = self.action_prev_ph
+        if action_rnn is None:
+            action_rnn = self.action_prev_ph
         if my is None:
             my = self.my_ph
 
-        if self.obs_module_indices is not None:
-            obs = tf.gather(obs, self.obs_module_indices["vf"], axis=-1)
-
         with tf.variable_scope(scope, reuse=reuse):
-            if self.feature_extraction == "cnn" and self.cnn_vf:
-                critics_h = self.cnn_extractor(obs, name="vf_c1", act_fun=self.activ_fn, **self.cnn_kwargs)
-            else:
-                critics_h = tf.layers.flatten(obs)
+            #if self.feature_extraction == "cnn" and self.cnn_vf:
+            #    critics_h = self.cnn_extractor(obs, name="vf_c1", act_fun=self.activ_fn, **self.cnn_kwargs)
+            #else:
+            critics_h_ff = tf.layers.flatten(obs_ff)
+            critics_h_lstm = tf.layers.flatten(obs_rnn)
 
             # Concatenate preprocessed state and action
-            ff_branch_in = tf.concat([critics_h, action, goal, my], axis=-1)
-            lstm_branch_in = tf.concat([critics_h, action_prev], axis=-1)
+            ff_branch_in = tf.concat([critics_h_ff, action_ff, goal, my], axis=-1)
+            lstm_branch_in = tf.concat([critics_h_lstm, action_rnn], axis=-1)
 
             self.qf1, self.qf2 = None, None
             self.qf1_state, self.qf2_state = None, None
 
+            masks = batch_to_seq(self.dones_ph, 100, 1)
+
             # Double Q values to reduce overestimation
-            for i in range(2):
+            for i in range(1, 3):
                 with tf.variable_scope('qf{}'.format(i), reuse=reuse):
-                    ff_branch = mlp(ff_branch_in, [128], self.activ_fn, layer_norm=self.layer_norm)
-                    lstm_branch = mlp(lstm_branch_in, [128], self.activ_fn, self.layer_norm)
-                    lstm_branch, q_state = lstm(lstm_branch, self.dones_ph, getattr(self, "qf{}_state_ph".format(i)),
+                    ff_branch = self.activ_fn(tf.layers.dense(ff_branch_in, 128, name="ff_fc_0"))
+                    lstm_branch = self.activ_fn(tf.layers.dense(lstm_branch_in, 128, name="lstm_fc_0"))
+                    lstm_branch = batch_to_seq(lstm_branch, 100, 1)
+                    lstm_branch, q_state = lstm(lstm_branch, masks, getattr(self, "qf{}_state_ph".format(i)),
                                                 "lstm_qf{}".format(i), n_hidden=128, layer_norm=self.layer_norm)
                     setattr(self, "qf{}_state".format(i), q_state)
+                    lstm_branch = seq_to_batch(lstm_branch)
                     head = tf.concat([ff_branch, lstm_branch], axis=-1)
                     head = mlp(head, [128, 128], self.activ_fn, self.layer_norm)
                     setattr(self, "qf{}".format(i), tf.layers.dense(head, 1, name="qf{}".format(i)))
 
         return self.qf1, self.qf2
 
-    def step(self, obs, state=None, goal=None, action_prev=None, mask=None):
+    def step(self, obs, state=None, goal=None, action_prev=None, mask=None, obs_rnn=None):
         return self.sess.run([self.policy, self.pi_state],
-                        {self.obs_ph: obs, self.goal_ph: goal, self.pi_state_ph: state, self.dones_ph: mask})
+                        {self.obs_ph: obs, self.goal_ph: goal, self.pi_state_ph: state, self.dones_ph: mask,
+                         self.action_prev_ph: action_prev})
 
-    def update_q_states(self, h):
-        pass
-
-    def update_pi_state(self, h):
-        pass
+    @property
+    def initial_state(self):
+        return self.pi_initial_state
 
 
 class CnnPolicy(FeedForwardPolicy):
@@ -414,7 +428,26 @@ class LnMlpPolicy(FeedForwardPolicy):
         super(LnMlpPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse,
                                           feature_extraction="mlp", layer_norm=True, **_kwargs)
 
+class DRPolicy(RecurrentPolicy):
+    """
+    Policy object that implements actor critic, using a recurrent Policy
 
+    :param sess: (TensorFlow session) The current TensorFlow session
+    :param ob_space: (Gym Space) The observation space of the environment
+    :param ac_space: (Gym Space) The action space of the environment
+    :param n_env: (int) The number of environments to run
+    :param n_steps: (int) The number of steps to run for each environment
+    :param n_batch: (int) The number of batch to run (n_envs * n_steps)
+    :param reuse: (bool) If the policy is reusable or not
+    :param _kwargs: (dict) Extra keyword arguments for the nature CNN feature extraction
+    """
+
+    def __init__(self, sess, ob_space, ac_space, n_env=1, n_steps=1, n_batch=None, reuse=False, **_kwargs):
+        super(DRPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse,
+                                          feature_extraction="mlp", layer_norm=False, **_kwargs)
+
+
+register_policy("DRPolicy", DRPolicy)
 register_policy("CnnPolicy", CnnPolicy)
 register_policy("LnCnnPolicy", LnCnnPolicy)
 register_policy("MlpPolicy", MlpPolicy)

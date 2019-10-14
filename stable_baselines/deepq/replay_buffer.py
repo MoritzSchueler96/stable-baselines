@@ -191,7 +191,7 @@ class DRRecurrentReplayBuffer(RecurrentReplayBuffer):
             return super(DRRecurrentReplayBuffer, self).sample(batch_size)
 
     def _encode_sample(self, ep_idxes, ep_ts):
-        obses_t, actions, rewards, obses_tp1, dones, goals, mys, hists = [], [], [], [], [], [], [], []
+        obses_t, actions, rewards, obses_tp1, dones, goals, mys, hists_o, hists_a = [], [], [], [], [], [], [], [], []
         for i in ep_idxes:
             if self.her_k > 0:
                 ep_t = int(ep_ts[i] / self.her_k)
@@ -203,16 +203,25 @@ class DRRecurrentReplayBuffer(RecurrentReplayBuffer):
                 goal = goal[ep_ts[i] - ep_t * self.her_k]
                 reward = reward[ep_ts[i] - ep_t * self.her_k]
             ep_scan_start = ep_t - self._scan_length if ep_t - self._scan_length >= 0 else 0
-            hist = [ep_data_h[0] for ep_data_h in ep_data[ep_scan_start:ep_t]]
+            hist_o, hist_a = [], []
+            for hist_i in range(ep_scan_start, ep_t):
+                hist_o.append(ep_data[hist_i][0])
+                if hist_i > 0:
+                    hist_a.append(ep_data[hist_i - 1][1])
+                else:
+                    hist_a.append(np.zeros(shape=(len(ep_data[0][1]),)))
+            hist_o.append(obs_t)
+            hist_a.append(action)
             obses_t.append(np.array(obs_t, copy=False))
             actions.append(np.array(action, copy=False))
             rewards.append(reward)
             obses_tp1.append(np.array(obs_tp1, copy=False))
             dones.append(done)
-            hists.append(np.array(hist, copy=False))
+            hists_o.append(np.array(hist_o, copy=False))
+            hists_a.append(np.array(hist_a, copy=False))
             goal.append(np.array(goal, copy=False))
             mys.append(np.array(self._episode_my[i], copy=False))
-        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), np.array(goals), hists, np.array(mys)
+        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), np.array(goals), hists_o, hists_a, np.array(mys)
 
 
 class PrioritizedReplayBuffer(ReplayBuffer):
