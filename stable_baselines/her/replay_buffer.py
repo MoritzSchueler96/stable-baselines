@@ -4,7 +4,7 @@ import scipy.signal
 
 import numpy as np
 
-from stable_baselines.deepq.replay_buffer import StableReplayBuffer
+from stable_baselines.common.buffers import StableReplayBuffer
 
 
 class GoalSelectionStrategy(Enum):
@@ -72,7 +72,12 @@ class HindsightExperienceReplayWrapper(object):
             #self.legal_goal_low, self.legal_goal_high = self.env.env.get_goal_limits()
         self.replay_buffer = replay_buffer
 
-    def add(self, obs_t, action, reward, obs_tp1, done):
+        if replay_buffer.__name__ == "DRReccurentReplayBuffer":
+            self.recurrent = True
+        else:
+            self.recurrent = False
+
+    def add(self, obs_t, action, reward, obs_tp1, done, goal=None, my=None):
         """
         add a new transition to the buffer
 
@@ -84,7 +89,10 @@ class HindsightExperienceReplayWrapper(object):
         """
         assert self.replay_buffer is not None
         # Update current episode buffer
-        self.episode_transitions.append((obs_t, action, reward, obs_tp1, done))
+        if self.recurrent:
+            self.episode_transitions.append((obs_t, action, reward, obs_tp1, done, goal, my))
+        else:
+            self.episode_transitions.append((obs_t, action, reward, obs_tp1, done))
         if self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
             # Store information about typical change in achieved goal (should consider if desired goal also changes)
             pass
@@ -188,15 +196,16 @@ class HindsightExperienceReplayWrapper(object):
 
         for transition_idx, transition in enumerate(self.episode_transitions):
 
-            obs_t, action, reward, obs_tp1, done = transition
-
-            # Add to the replay buffer
-            if self.replay_buffer.__name__ == "StableReplayBuffer":
-                self.replay_buffer.add(obs_t, action, reward, obs_tp1, done, tot_achieved_goal_changes)
-            elif self.replay_buffer.__name__ == "DRRecurrentReplayBuffer":
-                self.replay_buffer.add()
+            if self.recurrent:
+                obs_t, action, reward, obs_tp1, done, goal, my = transition
+                self.replay_buffer.add(obs_t, action, reward, obs_tp1, done, goal, my)
             else:
-                self.replay_buffer.add(obs_t, action, reward, obs_tp1, done)
+                obs_t, action, reward, obs_tp1, done = transition
+                # Add to the replay buffer
+                if self.replay_buffer.__name__ == "StableReplayBuffer":
+                    self.replay_buffer.add(obs_t, action, reward, obs_tp1, done, tot_achieved_goal_changes)
+                else:
+                    self.replay_buffer.add(obs_t, action, reward, obs_tp1, done)
 
             if self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE and (self.stable_indices.shape[0] == 0 or transition_idx >= self.stable_indices[-1]):
                 continue
@@ -213,7 +222,10 @@ class HindsightExperienceReplayWrapper(object):
             # For each sampled goals, store a new transition
             for goal in sampled_goals:
                 # Copy transition to avoid modifying the original one
-                obs, action, reward, next_obs, done = copy.deepcopy(transition)
+                if self.recurrent:
+                    obs, action, reward, next_obs, done = copy.deepcopy(transition)
+                else:
+                    obs, action, reward, next_obs, done = copy.deepcopy(transition)
 
                 # Convert concatenated obs to dict, so we can update the goals
                 obs_dict, next_obs_dict = map(self.env.convert_obs_to_dict, (obs, next_obs))
