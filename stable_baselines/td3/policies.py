@@ -248,7 +248,7 @@ class RecurrentPolicy(TD3Policy):
         self.qf1_state = None
         self.qf2_state = None
 
-    def make_actor(self, obs_ff=None, goal=None, obs_rnn=None, action_rnn=None, reuse=False, scope="pi"):
+    def make_actor(self, obs_ff=None, goal=None, obs_rnn=None, action_rnn=None, dones=None, reuse=False, scope="pi"):
         if obs_ff is None:
             obs_ff = self.processed_obs
         if obs_rnn is None:
@@ -257,6 +257,8 @@ class RecurrentPolicy(TD3Policy):
             goal = self.goal_ph
         if action_rnn is None:
             action_rnn = self.action_prev_ph
+        if dones is None:
+            dones = self.dones_ph
 
         #if self.obs_module_indices is not None:
         #    obs = tf.gather(obs, self.obs_module_indices["pi"], axis=-1)
@@ -273,7 +275,7 @@ class RecurrentPolicy(TD3Policy):
             lstm_branch = tf.concat([pi_h_lstm, action_rnn], axis=-1)
             lstm_branch = self.activ_fn(tf.layers.dense(lstm_branch, self.n_lstm, name="rnn_fc0"))
             lstm_branch = batch_to_seq(lstm_branch, n_batch=self.n_env, n_steps=self.n_steps)
-            masks = batch_to_seq(self.dones_ph, self.n_env, self.n_steps)
+            masks = batch_to_seq(dones, self.n_env, self.n_steps)
             lstm_branch, self.pi_state = lstm(lstm_branch, masks, self.pi_state_ph, 'lstm_pi', n_hidden=self.n_lstm,
                                          layer_norm=self.layer_norm)
             lstm_branch = seq_to_batch(lstm_branch)
@@ -284,7 +286,7 @@ class RecurrentPolicy(TD3Policy):
 
         return policy
 
-    def make_critics(self, obs_ff=None, action_ff=None, goal=None, my=None, obs_rnn=None, action_rnn=None, reuse=False, scope="values_fn"):
+    def make_critics(self, obs_ff=None, action_ff=None, goal=None, my=None, obs_rnn=None, action_rnn=None, dones=None, reuse=False, scope="values_fn"):
         if obs_ff is None:
             obs_ff = self.processed_obs
         if obs_rnn is None:
@@ -295,6 +297,8 @@ class RecurrentPolicy(TD3Policy):
             action_rnn = self.action_prev_ph
         if my is None:
             my = self.my_ph
+        if dones is None:
+            dones = self.dones_ph
 
         with tf.variable_scope(scope, reuse=reuse):
             #if self.feature_extraction == "cnn" and self.cnn_vf:
@@ -310,7 +314,7 @@ class RecurrentPolicy(TD3Policy):
             self.qf1, self.qf2 = None, None
             self.qf1_state, self.qf2_state = None, None
 
-            masks = batch_to_seq(self.dones_ph, self.n_env, self.n_steps)
+            masks = batch_to_seq(dones, self.n_env, self.n_steps)
 
             # Double Q values to reduce overestimation
             for i in range(1, 3):
