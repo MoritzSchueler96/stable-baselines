@@ -242,12 +242,12 @@ class DRRecurrentReplayBuffer(RecurrentReplayBuffer):
 
     def _encode_sample(self, ep_idxes, ep_ts):
         obses_t, actions, rewards, obses_tp1, dones, goals, mys, hists_o, hists_a = [], [], [], [], [], [], [], [], []
-        for i in ep_idxes:
+        for i, ep_i in enumerate(ep_idxes):
             if self.her_k > 0:
                 ep_t = int(ep_ts[i] / (self.her_k + 1))
             else:
                 ep_t = ep_ts[i]
-            ep_data = self._storage[i]
+            ep_data = self._storage[ep_i]
             obs_t, action, reward, obs_tp1, done, goal = ep_data[ep_t]
             if self.her_k > 0:
                 goal = goal[ep_ts[i] - ep_t * (self.her_k + 1)]
@@ -274,7 +274,7 @@ class DRRecurrentReplayBuffer(RecurrentReplayBuffer):
             hists_o.append(np.array(hist_o, copy=False))
             hists_a.append(np.array(hist_a, copy=False))
             goals.append(np.array(goal, copy=False))
-            mys.append(np.array(self._episode_my[i], copy=False))
+            mys.append(np.array(self._episode_my[ep_i], copy=False))
         return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), np.array(goals), hists_o, hists_a, np.array(mys)
 
 
