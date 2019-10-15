@@ -72,7 +72,7 @@ class HindsightExperienceReplayWrapper(object):
             #self.legal_goal_low, self.legal_goal_high = self.env.env.get_goal_limits()
         self.replay_buffer = replay_buffer
 
-        if replay_buffer.__name__ == "DRReccurentReplayBuffer":
+        if replay_buffer.__name__ == "DRRecurrentReplayBuffer":
             self.recurrent = True
         else:
             self.recurrent = False
@@ -223,7 +223,7 @@ class HindsightExperienceReplayWrapper(object):
             for goal in sampled_goals:
                 # Copy transition to avoid modifying the original one
                 if self.recurrent:
-                    obs, action, reward, next_obs, done = copy.deepcopy(transition)
+                    obs, action, reward, next_obs, done, _, _ = copy.deepcopy(transition)
                 else:
                     obs, action, reward, next_obs, done = copy.deepcopy(transition)
 
