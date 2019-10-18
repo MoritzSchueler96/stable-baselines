@@ -188,7 +188,7 @@ class DRRecurrentReplayBuffer(RecurrentReplayBuffer):
                 ep_idxes = random.sample(range(num_episodes), k=batch_size)
             else:
                 ep_idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]
-            ep_ts = [random.randint(0, (len(self._storage[ep_i]) - 1) * (1 + self.her_k)) for ep_i in ep_idxes]  # - self._optim_length)
+            ep_ts = [random.randint(self._scan_length * (1 + self.her_k), (len(self._storage[ep_i]) - 1) * (1 + self.her_k)) for ep_i in ep_idxes]  # - self._optim_length)
             return self._encode_sample(ep_idxes, ep_ts)
         else:
             return super(DRRecurrentReplayBuffer, self).sample(batch_size)
@@ -209,13 +209,13 @@ class DRRecurrentReplayBuffer(RecurrentReplayBuffer):
                 ep_scan_start = ep_t - self._scan_length if ep_t - self._scan_length >= 0 else 0
                 hist_o, hist_a = [], []
                 for hist_i in range(ep_scan_start, ep_t):
-                    hist_o.append(ep_data[hist_i][0])
+                    hist_o.append(np.array(ep_data[hist_i][0]))
                     if hist_i > 0:
-                        hist_a.append(ep_data[hist_i - 1][1])
+                        hist_a.append(np.array(ep_data[hist_i - 1][1]))
                     else:
                         hist_a.append(np.zeros(shape=(len(ep_data[0][1]),)))
-                hist_o.append(obs_t)
-                hist_a.append(ep_data[ep_t - 1][1])
+                hist_o.append(np.array(obs_t))
+                hist_a.append(np.array(ep_data[ep_t - 1][1]))
             else:
                 hist_o = obs_t
                 hist_a = ep_data[ep_t - 1][1]
@@ -224,11 +224,11 @@ class DRRecurrentReplayBuffer(RecurrentReplayBuffer):
             rewards.append(reward)
             obses_tp1.append(np.array(obs_tp1, copy=False))
             dones.append(done)
-            hists_o.append(np.array(hist_o, copy=False))
-            hists_a.append(np.array(hist_a, copy=False))
+            hists_o.extend(hist_o)
+            hists_a.extend(hist_a)
             goals.append(np.array(goal, copy=False))
             mys.append(np.array(self._episode_my[ep_i], copy=False))
-        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), np.array(goals), hists_o, hists_a, np.array(mys)
+        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), np.array(goals), np.array(hists_o), np.array(hists_a), np.array(mys)
 
 
 class PrioritizedReplayBuffer(ReplayBuffer):

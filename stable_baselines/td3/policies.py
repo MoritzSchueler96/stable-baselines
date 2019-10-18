@@ -238,7 +238,9 @@ class RecurrentPolicy(TD3Policy):
             self.qf1_state_ph = tf.placeholder(tf.float32, (1, self.n_lstm * 2), name="qf1_state_ph")
             self.qf2_state_ph = tf.placeholder(tf.float32, (1, self.n_lstm * 2), name="qf2_state_ph")
             self.my_ph = tf.placeholder(tf.float32, (None, 37), name="my_ph")  # the dynamics of the environment
-            self.obs_rnn_ph = tf.placeholder(tf.float32, shape=self.processed_obs.shape, name="obs_rnn_ph")
+            obs_rnn_shape = [dim for dim in self.processed_obs.shape]
+            obs_rnn_shape[0] *= self.n_steps
+            self.obs_rnn_ph = tf.placeholder(tf.float32, shape=obs_rnn_shape, name="obs_rnn_ph")
 
         self.pi_initial_state = np.zeros((1, self.n_lstm * 2), dtype=np.float32)
         self.qf1_initial_state = np.zeros((1, self.n_lstm * 2), dtype=np.float32)
@@ -273,11 +275,13 @@ class RecurrentPolicy(TD3Policy):
             ff_branch = self.activ_fn(tf.layers.dense(ff_branch, 128, name="ff_fc0"))
 
             lstm_branch = tf.concat([pi_h_lstm, action_rnn], axis=-1)
-            lstm_branch = self.activ_fn(tf.layers.dense(lstm_branch, self.n_lstm, name="rnn_fc0"))
-            lstm_branch = batch_to_seq(lstm_branch, n_batch=self.n_env, n_steps=self.n_steps)
-            masks = batch_to_seq(dones, self.n_env, self.n_steps)
+            lstm_branch = self.activ_fn(tf.layers.dense(lstm_branch, 128, name="rnn_fc0"))
+            lstm_branch = batch_to_seq(lstm_branch, n_batch=self.n_batch, n_steps=self.n_steps)
+            masks = batch_to_seq(dones, self.n_batch, self.n_steps)
             lstm_branch, self.pi_state = lstm(lstm_branch, masks, self.pi_state_ph, 'lstm_pi', n_hidden=self.n_lstm,
                                          layer_norm=self.layer_norm)
+            if self.n_steps > 1:  # TODO: just speculating here
+                lstm_branch = [lstm_branch[-1]]
             lstm_branch = seq_to_batch(lstm_branch)
             head = tf.concat([ff_branch, lstm_branch], axis=-1)
             head = mlp(head, [128, 128], self.activ_fn, self.layer_norm)
@@ -314,17 +318,19 @@ class RecurrentPolicy(TD3Policy):
             self.qf1, self.qf2 = None, None
             self.qf1_state, self.qf2_state = None, None
 
-            masks = batch_to_seq(dones, self.n_env, self.n_steps)
+            masks = batch_to_seq(dones, self.n_batch, self.n_steps)
 
             # Double Q values to reduce overestimation
             for i in range(1, 3):
                 with tf.variable_scope('qf{}'.format(i), reuse=reuse):
                     ff_branch = self.activ_fn(tf.layers.dense(ff_branch_in, 128, name="ff_fc_0"))
                     lstm_branch = self.activ_fn(tf.layers.dense(lstm_branch_in, 128, name="lstm_fc_0"))
-                    lstm_branch = batch_to_seq(lstm_branch, self.n_env, self.n_steps)
+                    lstm_branch = batch_to_seq(lstm_branch, self.n_batch, self.n_steps)
                     lstm_branch, q_state = lstm(lstm_branch, masks, getattr(self, "qf{}_state_ph".format(i)),
                                                 "lstm_qf{}".format(i), n_hidden=self.n_lstm, layer_norm=self.layer_norm)
                     setattr(self, "qf{}_state".format(i), q_state)
+                    if self.n_steps > 1:  # TODO: just speculating here
+                        lstm_branch = [lstm_branch[-1]]
                     lstm_branch = seq_to_batch(lstm_branch)
                     head = tf.concat([ff_branch, lstm_branch], axis=-1)
                     head = mlp(head, [128, 128], self.activ_fn, self.layer_norm)
