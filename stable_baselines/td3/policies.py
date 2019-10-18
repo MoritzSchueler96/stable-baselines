@@ -201,13 +201,13 @@ class RecurrentPolicy(TD3Policy):
         """
     recurrent = True
 
-    def __init__(self, sess, ob_space, ac_space, n_env=1, n_steps=1, n_batch=None, reuse=False, layers=None,
+    def __init__(self, sess, ob_space, ac_space, goal_size, my_size, n_env=1, n_steps=1, n_batch=None, reuse=False, layers=None,
                  cnn_extractor=nature_cnn, feature_extraction="mlp",
                  layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
         #ob_space  # Hack away goal from obs placeholder
         policy_ob_space = copy.deepcopy(ob_space)
-        policy_ob_space.low = policy_ob_space.low[:-3]
-        policy_ob_space.high = policy_ob_space.high[:-3]
+        policy_ob_space.low = policy_ob_space.low[:-goal_size]
+        policy_ob_space.high = policy_ob_space.high[:-goal_size]
         policy_ob_space.shape = policy_ob_space.high.shape
         super(RecurrentPolicy, self).__init__(sess, policy_ob_space, ac_space, n_env, n_steps, n_batch,
                                                 reuse=reuse,
@@ -232,12 +232,12 @@ class RecurrentPolicy(TD3Policy):
 
         with tf.variable_scope("input", reuse=False):
             self.dones_ph = tf.placeholder(tf.float32, (None,), name="dones_ph")  # (done t-1)
-            self.goal_ph = tf.placeholder(tf.float32, (None, 3), name="goal_ph")
-            self.action_prev_ph = tf.placeholder(tf.float32, (None, 3), name="action_prev_ph")
+            self.goal_ph = tf.placeholder(tf.float32, (None, goal_size), name="goal_ph")
+            self.action_prev_ph = tf.placeholder(tf.float32, (None, ac_space), name="action_prev_ph")
             self.pi_state_ph = tf.placeholder(tf.float32, (1, self.n_lstm * 2), name="pi_state_ph")
             self.qf1_state_ph = tf.placeholder(tf.float32, (1, self.n_lstm * 2), name="qf1_state_ph")
             self.qf2_state_ph = tf.placeholder(tf.float32, (1, self.n_lstm * 2), name="qf2_state_ph")
-            self.my_ph = tf.placeholder(tf.float32, (None, 37), name="my_ph")  # the dynamics of the environment
+            self.my_ph = tf.placeholder(tf.float32, (None, my_size), name="my_ph")  # the dynamics of the environment
             obs_rnn_shape = [dim for dim in self.processed_obs.shape]
             obs_rnn_shape[0] *= self.n_steps
             self.obs_rnn_ph = tf.placeholder(tf.float32, shape=obs_rnn_shape, name="obs_rnn_ph")
