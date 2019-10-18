@@ -169,7 +169,7 @@ class TD3(OffPolicyRLModel):
                                 buffer_kw.update({"learning_starts": self.prioritization_starts, "batch_size": self.batch_size})
                             self.replay_buffer = self.buffer_type(**buffer_kw)
                     else:
-                        self.replay_buffer = self.buffer_type(self.buffer_size, episode_max_len=300, scan_length=0)
+                        self.replay_buffer = self.buffer_type(self.buffer_size, episode_max_len=300, scan_length=4)
 
                 #self.replay_buffer = DiscrepancyReplayBuffer(self.buffer_size, scorer=self.policy_tf.get_q_discrepancy)
 
@@ -177,10 +177,11 @@ class TD3(OffPolicyRLModel):
                     # Create policy and target TF objects
                     if self.recurrent_policy:
                         self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
-                                                     n_batch=self.batch_size, n_steps=self.batch_size, **self.policy_kwargs)
+                                                     n_batch=self.batch_size, n_steps=5, **self.policy_kwargs)
                         self.policy_tf_act = self.policy(self.sess, self.observation_space, self.action_space, n_batch=1,
                                                            **self.policy_kwargs)
-                        self.target_policy_tf = self.policy(self.sess, self.observation_space, self.action_space, n_batch=self.batch_size, n_steps=self.batch_size,
+                        self.target_policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
+                                                            n_batch=self.batch_size, n_steps=5,
                                                             **self.policy_kwargs)
                     else:
                         self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
@@ -388,7 +389,8 @@ class TD3(OffPolicyRLModel):
         if self.recurrent_policy:
             # TODO: does this lose important gradient contributions?
             self.pi_states = None
-            rnn_state_reset = np.ones_like(batch_dones)
+            rnn_state_reset = np.zeros(shape=(self.batch_size * 5,), dtype=np.bool)
+            rnn_state_reset[::5] = 1
 
             feed_dict.update({
                 self.my_ph: batch_mys,
