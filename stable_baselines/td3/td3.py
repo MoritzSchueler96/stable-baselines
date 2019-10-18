@@ -388,13 +388,14 @@ class TD3(OffPolicyRLModel):
         if self.recurrent_policy:
             # TODO: does this lose important gradient contributions?
             self.pi_states = None
+            rnn_state_reset = np.ones_like(batch_dones)
 
             feed_dict.update({
                 self.my_ph: batch_mys,
                 self.goal_ph: batch_goals,
                 self.obs_rnn_ph: batch_hist_o,
                 self.action_prev_ph: batch_hist_a,
-                self.dones_ph: batch_dones,
+                self.dones_ph: rnn_state_reset,
                 self.policy_tf.pi_state_ph: self.policy_tf.initial_state,
                 self.policy_tf.qf1_state_ph: self.policy_tf.initial_state,
                 self.policy_tf.qf2_state_ph: self.policy_tf.initial_state,
