@@ -670,14 +670,17 @@ class TD3(OffPolicyRLModel):
         warnings.warn("Warning: action probability is meaningless for TD3. Returning None")
         return None
 
-    def predict(self, observation, state=None, mask=None, deterministic=True):
+    def predict(self, observation, state=None, mask=None, deterministic=True, action_prev=None):
         observation = np.array(observation)
         vectorized_env = self._is_vectorized_observation(observation, self.observation_space)
 
         observation = observation.reshape((-1,) + self.observation_space.shape)
         state = None
         if self.recurrent_policy:
-            actions, state = self.policy_tf_act.step(observation, state, mask)
+            obs_dict = self.env.convert_obs_to_dict(observation[0]) # TODO: fix for batch size > 1
+            d_goal = obs_dict["desired_goal"]
+            obs = np.concatenate([obs_dict["observation"], obs_dict["achieved_goal"]])
+            actions, state = self.policy_tf_act.step(obs[None], state=state, mask=mask, goal=d_goal[None], action_prev=action_prev[None])
         else:
             actions = self.policy_tf.step(observation)
 
@@ -732,7 +735,7 @@ class TD3(OffPolicyRLModel):
             # Should we also store the replay buffer?
             # this may lead to high memory usage
             # with all transition inside
-            "replay_buffer": self.replay_buffer,
+            #"replay_buffer": self.replay_buffer,
             "policy_delay": self.policy_delay,
             "target_noise_clip": self.target_noise_clip,
             "target_policy_noise": self.target_policy_noise,
