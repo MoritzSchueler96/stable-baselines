@@ -66,7 +66,7 @@ class TD3(OffPolicyRLModel):
                  target_policy_noise=0.2, target_noise_clip=0.5,
                  random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None,
-                 full_tensorboard_log=False, seed=None, n_cpu_tf_sess=None, time_aware=False):
+                 full_tensorboard_log=False, seed=None, n_cpu_tf_sess=None, time_aware=False, recurrent_scan_length=0):
         super(TD3, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=TD3Policy, requires_vec_env=False, policy_kwargs=policy_kwargs,
                                   seed=seed, n_cpu_tf_sess=n_cpu_tf_sess)
@@ -92,6 +92,7 @@ class TD3(OffPolicyRLModel):
         self.target_policy_noise = target_policy_noise
 
         self.time_aware = time_aware
+        self.recurrent_scan_length = recurrent_scan_length
 
         self.graph = None
         self.replay_buffer = None
@@ -169,19 +170,27 @@ class TD3(OffPolicyRLModel):
                                 buffer_kw.update({"learning_starts": self.prioritization_starts, "batch_size": self.batch_size})
                             self.replay_buffer = self.buffer_type(**buffer_kw)
                     else:
-                        self.replay_buffer = self.buffer_type(self.buffer_size, episode_max_len=300, scan_length=4)
+                        self.replay_buffer = self.buffer_type(self.buffer_size, episode_max_len=300,
+                                                              scan_length=self.recurrent_scan_length)
 
                 #self.replay_buffer = DiscrepancyReplayBuffer(self.buffer_size, scorer=self.policy_tf.get_q_discrepancy)
 
                 with tf.variable_scope("input", reuse=False):
                     # Create policy and target TF objects
                     if self.recurrent_policy:
+                        my_size = len(self.env.env.get_simulator_parameters())
+                        goal_size = self.env.goal_dim
                         self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
-                                                     n_batch=self.batch_size, n_steps=5, **self.policy_kwargs)
-                        self.policy_tf_act = self.policy(self.sess, self.observation_space, self.action_space, n_batch=1,
-                                                           **self.policy_kwargs)
+                                                     goal_size=goal_size, my_size=my_size,
+                                                     n_batch=self.batch_size, n_steps=self.recurrent_scan_length + 1
+                                                     , **self.policy_kwargs)
+                        self.policy_tf_act = self.policy(self.sess, self.observation_space, self.action_space,
+                                                         goal_size=goal_size, my_size=my_size, n_batch=1,
+                                                         **self.policy_kwargs)
                         self.target_policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
-                                                            n_batch=self.batch_size, n_steps=5,
+                                                            goal_size=goal_size, my_size=my_size,
+                                                            n_batch=self.batch_size,
+                                                            n_steps=self.recurrent_scan_length + 1,
                                                             **self.policy_kwargs)
                     else:
                         self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
@@ -389,8 +398,8 @@ class TD3(OffPolicyRLModel):
         if self.recurrent_policy:
             # TODO: does this lose important gradient contributions?
             self.pi_states = None
-            rnn_state_reset = np.zeros(shape=(self.batch_size * 5,), dtype=np.bool)
-            rnn_state_reset[::5] = 1
+            rnn_state_reset = np.zeros(shape=(self.batch_size * (self.recurrent_scan_length + 1),), dtype=np.bool)
+            rnn_state_reset[::(self.recurrent_scan_length + 1)] = 1
 
             feed_dict.update({
                 self.my_ph: batch_mys,
