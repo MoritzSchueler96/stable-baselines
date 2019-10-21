@@ -584,10 +584,11 @@ class TD3(OffPolicyRLModel):
                             obs = self.env.reset(**sample_state[np.argmax(obs_discrepancies)])
                         else:
                             obs = self.env.reset()
-                            obs_dict = self.env.convert_obs_to_dict(obs)
-                            d_goal = obs_dict["desired_goal"]
-                            obs = np.concatenate([obs_dict["observation"], obs_dict["achieved_goal"]])
-                            action_prev = np.zeros(shape=self.action_space.shape)
+                            if self.recurrent_policy:
+                                obs_dict = self.env.convert_obs_to_dict(obs)
+                                d_goal = obs_dict["desired_goal"]
+                                obs = np.concatenate([obs_dict["observation"], obs_dict["achieved_goal"]])
+                                action_prev = np.zeros(shape=self.action_space.shape)
                     episode_rewards.append(0.0)
 
                     maybe_is_success = info.get('is_success')
