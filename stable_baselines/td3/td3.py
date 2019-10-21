@@ -64,7 +64,7 @@ class TD3(OffPolicyRLModel):
                  target_policy_noise=0.2, target_noise_clip=0.5,
                  random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, time_aware=False,
-                 recurrent_scan_length=0):
+                 recurrent_scan_length=0, expert=None):
 
         super(TD3, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=TD3Policy, requires_vec_env=False, policy_kwargs=policy_kwargs)
@@ -91,6 +91,7 @@ class TD3(OffPolicyRLModel):
 
         self.time_aware = time_aware
         self.recurrent_scan_length = recurrent_scan_length
+        self.expert = expert
 
         self.graph = None
         self.replay_buffer = None
@@ -139,6 +140,9 @@ class TD3(OffPolicyRLModel):
             self.qf2_state = None
             self.act_ops = None
 
+        self.expert_actions_ph = None
+        self.q_filter_ph = None
+
         self.active_sampling = False
 
         if _init_setup_model:
@@ -171,8 +175,11 @@ class TD3(OffPolicyRLModel):
                                 buffer_kw.update({"learning_starts": self.prioritization_starts, "batch_size": self.batch_size})
                             self.replay_buffer = self.buffer_type(**buffer_kw)
                     else:
-                        self.replay_buffer = self.buffer_type(self.buffer_size, episode_max_len=300,
+                        if self.recurrent_policy:
+                            self.replay_buffer = self.buffer_type(self.buffer_size, episode_max_len=300,
                                                               scan_length=self.recurrent_scan_length)
+                        else:
+                            self.replay_buffer = self.buffer_type(self.buffer_size)
 
                 #self.replay_buffer = DiscrepancyReplayBuffer(self.buffer_size, scorer=self.policy_tf.get_q_discrepancy)
 
@@ -211,6 +218,9 @@ class TD3(OffPolicyRLModel):
                     self.actions_ph = tf.placeholder(tf.float32, shape=(None,) + self.action_space.shape,
                                                      name='actions')
                     self.learning_rate_ph = tf.placeholder(tf.float32, [], name="learning_rate_ph")
+                    if self.expert is not None:
+                        self.expert_actions_ph = tf.placeholder(tf.float32, shape=(None,) + self.action_space.shape,
+                                                            name="expert_actions")
 
                     if self.recurrent_policy:
                         self.goal_ph = self.policy_tf.goal_ph
@@ -235,6 +245,11 @@ class TD3(OffPolicyRLModel):
                         qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph, policy_out, self.goal_ph,
                                                                      self.my_ph, self.obs_rnn_ph, self.action_prev_ph,
                                                                      reuse=True)
+                        if self.expert is not None:
+                            qf1_expert, qf2_expert = self.policy_tf.make_critics(self.processed_obs_ph,
+                                                                                 self.expert_actions_ph, self.goal_ph,
+                                                                                 self.my_ph, self.obs_rnn_ph,
+                                                                                 self.action_prev_ph, reuse=True)
                     else:
                         self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph)
                         # Use two Q-functions to improve performance by reducing overestimation bias
@@ -242,6 +257,10 @@ class TD3(OffPolicyRLModel):
                         # Q value when following the current policy
                         qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph,
                                                                 policy_out, reuse=True)
+
+                        if self.expert is not None:
+                            qf1_expert, qf2_expert = self.policy_tf.make_critics(self.processed_obs_ph,
+                                                                                 self.expert_actions_ph, reuse=True)
 
                 with tf.variable_scope("target", reuse=False):
                     if self.recurrent_policy:
@@ -302,6 +321,13 @@ class TD3(OffPolicyRLModel):
 
                     # Policy loss: maximise q value
                     self.policy_loss = policy_loss = -rew_loss + action_loss
+                    if self.expert is not None:
+                        bc_loss = tf.where(qf1_pi < qf1_expert,
+                                           tf.norm(self.expert_actions_ph - policy_out, ord="euclidean", axis=1, keepdims=True),
+                                           tf.zeros([self.batch_size, 1], dtype=tf.float32))
+                        bc_loss = tf.reduce_mean(bc_loss) + 1e-10  # TODO: look into issue with NaN in tf.where gradient (https://stackoverflow.com/questions/33712178/tensorflow-nan-bug/42497444#42497444)
+                        #bc_loss = tf.Print(bc_loss, [bc_loss])
+                        self.policy_loss = policy_loss = -rew_loss + action_loss + bc_loss
 
                     # Policy train op
                     # will be called only every n training steps,
@@ -346,6 +372,9 @@ class TD3(OffPolicyRLModel):
                     tf.summary.scalar('qf2_loss', qf2_loss)
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
 
+                    if self.expert is not None:
+                        tf.summary.scalar("bc_loss", bc_loss)
+
                 # Retrieve parameters that must be saved
                 self.params = get_vars("model")
                 self.target_params = get_vars("target/")
@@ -383,6 +412,13 @@ class TD3(OffPolicyRLModel):
             self.terminals_ph: batch_dones.reshape(self.batch_size, -1),
             self.learning_rate_ph: learning_rate
         }
+
+        if self.expert is not None:
+            if self.recurrent_policy:
+                obs, goals = batch_obs, batch_goals
+            else:
+                obs, goals = batch_obs[:, :-3], batch_obs[:, -3:]
+            feed_dict[self.expert_actions_ph] = self.expert(obs, goals)
 
         if self.recurrent_policy:
             # TODO: does this lose important gradient contributions?
@@ -509,6 +545,8 @@ class TD3(OffPolicyRLModel):
                         action = np.clip(action + self.action_noise(), -1, 1)
                     # Rescale from [-1, 1] to the correct bounds
                     rescaled_action = action * np.abs(self.action_space.low)
+
+                # TODO: expert action choice here?
 
                 assert action.shape == self.env.action_space.shape
 
