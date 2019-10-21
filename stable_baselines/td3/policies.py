@@ -233,7 +233,7 @@ class RecurrentPolicy(TD3Policy):
         with tf.variable_scope("input", reuse=False):
             self.dones_ph = tf.placeholder(tf.float32, (None,), name="dones_ph")  # (done t-1)
             self.goal_ph = tf.placeholder(tf.float32, (None, goal_size), name="goal_ph")
-            self.action_prev_ph = tf.placeholder(tf.float32, (None, ac_space), name="action_prev_ph")
+            self.action_prev_ph = tf.placeholder(tf.float32, (None,) + ac_space.shape, name="action_prev_ph")
             self.pi_state_ph = tf.placeholder(tf.float32, (1, self.n_lstm * 2), name="pi_state_ph")
             self.qf1_state_ph = tf.placeholder(tf.float32, (1, self.n_lstm * 2), name="qf1_state_ph")
             self.qf2_state_ph = tf.placeholder(tf.float32, (1, self.n_lstm * 2), name="qf2_state_ph")
@@ -461,8 +461,8 @@ class DRPolicy(RecurrentPolicy):
     """
 
     def __init__(self, sess, ob_space, ac_space, n_env=1, n_steps=1, n_batch=None, reuse=False, **_kwargs):
-        super(DRPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse,
-                                          feature_extraction="mlp", layer_norm=False, **_kwargs)
+        super(DRPolicy, self).__init__(sess, ob_space, ac_space, n_env=n_env, n_steps=n_steps, n_batch=n_batch,
+                                       reuse=reuse, feature_extraction="mlp", layer_norm=False, **_kwargs)
 
 
 register_policy("DRPolicy", DRPolicy)
