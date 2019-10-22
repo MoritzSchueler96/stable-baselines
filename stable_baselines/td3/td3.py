@@ -322,11 +322,16 @@ class TD3(OffPolicyRLModel):
                     # Policy loss: maximise q value
                     self.policy_loss = policy_loss = -rew_loss + action_loss
                     if self.expert is not None:
-                        bc_loss = tf.where(qf1_pi < qf1_expert,
-                                           tf.norm(self.expert_actions_ph - policy_out, ord="euclidean", axis=1, keepdims=True),
-                                           tf.zeros([self.batch_size, 1], dtype=tf.float32))
-                        bc_loss = tf.reduce_mean(bc_loss) + 1e-10  # TODO: look into issue with NaN in tf.where gradient (https://stackoverflow.com/questions/33712178/tensorflow-nan-bug/42497444#42497444)
-                        #bc_loss = tf.Print(bc_loss, [bc_loss])
+                        expert_action_best = tf.logical_or(qf1_pi < qf1_expert, qf2_pi < qf2_expert)
+                        action_difference_norm = tf.norm(self.expert_actions_ph - policy_out, ord="euclidean", axis=1, keepdims=True)
+                        safe_x = tf.where(action_difference_norm > 1e-5,
+                                          action_difference_norm,
+                                          tf.zeros([self.batch_size, 1]))
+                        bc_loss = tf.where(expert_action_best,
+                                           safe_x,
+                                           tf.zeros([self.batch_size, 1]))
+                        bc_loss = 10 * tf.reduce_mean(bc_loss) # TODO: look into issue with NaN in tf.where gradient (https://stackoverflow.com/questions/33712178/tensorflow-nan-bug/42497444#42497444)
+                        #bc_loss = tf.Print(bc_loss, [tf.gradients(bc_loss, [self.expert_actions_ph])[0]])
                         self.policy_loss = policy_loss = -rew_loss + action_loss + bc_loss
 
                     # Policy train op
@@ -374,6 +379,7 @@ class TD3(OffPolicyRLModel):
 
                     if self.expert is not None:
                         tf.summary.scalar("bc_loss", bc_loss)
+                        tf.summary.scalar("Q-filter", tf.reduce_mean(tf.cast(expert_action_best, dtype=tf.float32)))
 
                 # Retrieve parameters that must be saved
                 self.params = get_vars("model")
