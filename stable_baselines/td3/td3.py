@@ -178,7 +178,7 @@ class TD3(OffPolicyRLModel):
                 with tf.variable_scope("input", reuse=False):
                     # Create policy and target TF objects
                     if self.recurrent_policy:
-                        my_size = len(self.env.env.get_simulator_parameters())
+                        my_size = len(self._get_env_parameters())
                         goal_size = self.env.goal_dim
                         self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
                                                      goal_size=goal_size, my_size=my_size,
@@ -547,7 +547,7 @@ class TD3(OffPolicyRLModel):
                     d_goal = new_obs["desired_goal"]
                     new_obs = np.concatenate([new_obs["observation"], new_obs["achieved_goal"]])
                     if done:
-                        self.replay_buffer.add(obs, action, reward, new_obs, done, d_goal, self.env.env.get_simulator_parameters())
+                        self.replay_buffer.add(obs, action, reward, new_obs, done, d_goal, self._get_env_parameters())
                     else:
                         self.replay_buffer.add(obs, action, reward, new_obs, done, d_goal)
                     obs = new_obs
@@ -710,6 +710,14 @@ class TD3(OffPolicyRLModel):
         env = env.env
 
         return env
+
+    def _get_env_parameters(self):
+        return []
+        if issubclass(self.replay_buffer, HindsightExperienceReplayWrapper):
+            return self.env.env.get_simulator_parameters()
+        else:
+            return self.env.get_simulator_parameters()
+
 
     def _set_prioritized_buffer(self):
         buffer_kw = {"size": self.buffer_size, "alpha": 0.7}
