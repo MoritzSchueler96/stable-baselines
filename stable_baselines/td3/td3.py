@@ -313,11 +313,11 @@ class TD3(OffPolicyRLModel):
                         qf1_loss = tf.reduce_mean((q_backup - qf1) ** 2)
                         qf2_loss = tf.reduce_mean((q_backup - qf2) ** 2)
 
-                    q_discrepancy = tf.abs(qf1_pi - qf2_pi)
+                    #q_discrepancy = tf.abs(qf1_pi - qf2_pi)
                     qvalues_losses = qf1_loss + qf2_loss
 
                     rew_loss = tf.reduce_mean(qf1_pi)
-                    q_disc_loss = tf.reduce_mean(q_discrepancy)#self.q_disc_strength_ph * tf.reduce_mean(q_discrepancy)
+                    #q_disc_loss = tf.reduce_mean(q_discrepancy)#self.q_disc_strength_ph * tf.reduce_mean(q_discrepancy)
                     action_loss = self.action_l2_scale * tf.nn.l2_loss(self.policy_out)
 
                     # Policy loss: maximise q value
@@ -367,11 +367,11 @@ class TD3(OffPolicyRLModel):
                     self.infos_names = ['qf1_loss', 'qf2_loss']
                     # All ops to call during one training step
                     self.step_ops = [qf1_loss, qf2_loss,
-                                     qf1, qf2, train_values_op, q_discrepancy]
+                                     qf1, qf2, train_values_op]#, q_discrepancy]
 
                     # Monitor losses and entropy in tensorboard
                     tf.summary.scalar("rew_loss", rew_loss)
-                    tf.summary.scalar("q_disc_loss", q_disc_loss)
+                    #tf.summary.scalar("q_disc_loss", q_disc_loss)
                     tf.summary.scalar("action_loss", action_loss)
                     tf.summary.scalar('policy_loss', policy_loss)
                     tf.summary.scalar('qf1_loss', qf1_loss)
@@ -468,7 +468,7 @@ class TD3(OffPolicyRLModel):
             out = self.sess.run(step_ops, feed_dict)
 
         # Unpack to monitor losses
-        q_discrepancies = out.pop(5)
+        #q_discrepancies = out.pop(5)
         qf1_loss, qf2_loss, *_values = out
 
         if self.buffer_is_prioritized and self.num_timesteps >= self.prioritization_starts:
@@ -477,7 +477,7 @@ class TD3(OffPolicyRLModel):
             else:
                 self.replay_buffer.update_priorities(batch_idxs, q_discrepancies)
 
-        return qf1_loss, qf2_loss, q_discrepancies
+        return qf1_loss, qf2_loss#, q_discrepancies
 
     def learn(self, total_timesteps, callback=None, seed=None,
               log_interval=4, tb_log_name="TD3", reset_num_timesteps=True, replay_wrapper=None):
