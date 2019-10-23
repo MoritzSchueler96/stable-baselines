@@ -64,7 +64,7 @@ class TD3(OffPolicyRLModel):
                  target_policy_noise=0.2, target_noise_clip=0.5,
                  random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, time_aware=False,
-                 recurrent_scan_length=0, expert=None, expert_scale=0):
+                 recurrent_scan_length=0, expert=None, expert_scale=0, expert_filtering_starts=0, pretrain_expert=False, expert_value_path=None):
 
         super(TD3, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=TD3Policy, requires_vec_env=False, policy_kwargs=policy_kwargs)
@@ -93,6 +93,9 @@ class TD3(OffPolicyRLModel):
         self.recurrent_scan_length = recurrent_scan_length
         self.expert = expert
         self.expert_scale = expert_scale
+        self.pretrain_expert = pretrain_expert
+        self.expert_filtering_starts = expert_filtering_starts
+        self.expert_value_path = expert_value_path
 
         self.graph = None
         self.replay_buffer = None
@@ -246,22 +249,41 @@ class TD3(OffPolicyRLModel):
                         qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph, policy_out, self.goal_ph,
                                                                      self.my_ph, self.obs_rnn_ph, self.action_prev_ph,
                                                                      reuse=True)
+
+
                         if self.expert is not None:
                             qf1_expert, qf2_expert = self.policy_tf.make_critics(self.processed_obs_ph,
                                                                                  self.expert_actions_ph, self.goal_ph,
                                                                                  self.my_ph, self.obs_rnn_ph,
                                                                                  self.action_prev_ph, reuse=True)
                     else:
-                        self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph)
+                        if self.pretrain_expert:
+                            self.policy_out = policy_out = self.expert_actions_ph
+                        else:
+                            self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph)
                         # Use two Q-functions to improve performance by reducing overestimation bias
                         qf1, qf2 = self.policy_tf.make_critics(self.processed_obs_ph, self.actions_ph)
                         # Q value when following the current policy
                         qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph,
                                                                 policy_out, reuse=True)
 
-                        if self.expert is not None:
-                            qf1_expert, qf2_expert = self.policy_tf.make_critics(self.processed_obs_ph,
-                                                                                 self.expert_actions_ph, reuse=True)
+                #self.qf1 = qf1_pi
+                #self.qf2 = qf2_pi
+                if self.expert is not None and not self.pretrain_expert:
+                    if self.expert_value_path is not None:
+                        with tf.variable_scope("expert", reuse=False):
+                            self.expert_tf = self.policy(self.sess, self.observation_space, self.action_space, **self.policy_kwargs)
+                            qf1_expert, qf2_expert = self.expert_tf.make_critics(self.processed_obs_ph, self.expert_actions_ph)
+                            _, expert_params = self._load_from_file(self.expert_value_path)
+                            expert_params = [val for key, val in expert_params.items() if "model/values_fn" in key]
+
+                            expert_init_op = [
+                                tf.assign(target, source)
+                                for target, source in zip(get_vars("expert"), expert_params)
+                            ]
+                    else:
+                        qf1_expert, qf2_expert = self.policy_tf.make_critics(self.processed_obs_ph,
+                                                                         self.expert_actions_ph, reuse=True)
 
                 with tf.variable_scope("target", reuse=False):
                     if self.recurrent_policy:
@@ -283,7 +305,10 @@ class TD3(OffPolicyRLModel):
                                                                                     dones=self.dones_ph)
                     else:
                         # Create target networks
-                        target_policy_out = self.target_policy_tf.make_actor(self.processed_next_obs_ph)
+                        if self.pretrain_expert:
+                            target_policy_out = policy_out
+                        else:
+                            target_policy_out = self.target_policy_tf.make_actor(self.processed_next_obs_ph)
                         # Target policy smoothing, by adding clipped noise to target actions
                         target_noise = tf.random_normal(tf.shape(target_policy_out), stddev=self.target_policy_noise)
                         target_noise = tf.clip_by_value(target_noise, -self.target_noise_clip, self.target_noise_clip)
@@ -322,13 +347,17 @@ class TD3(OffPolicyRLModel):
 
                     # Policy loss: maximise q value
                     self.policy_loss = policy_loss = -rew_loss + action_loss
-                    if self.expert is not None:
+                    if self.expert is not None and not self.pretrain_expert:
+                        self.q_filtering_disabled_ph = tf.placeholder(tf.bool, [], name="q_filter_disabled_ph")
+                        #qf1_pi = tf.Print(qf1_pi, [qf1_pi], "Qf1_pi: ")
+                        #qf1_expert = tf.Print(qf1_expert, [qf1_expert], "Qf1_expert: ")
                         expert_action_best = tf.logical_or(qf1_pi < qf1_expert, qf2_pi < qf2_expert)
                         action_difference_norm = tf.norm(self.expert_actions_ph - policy_out, ord="euclidean", axis=1, keepdims=True)
                         safe_x = tf.where(action_difference_norm > 1e-5,
                                           action_difference_norm,
                                           tf.zeros([self.batch_size, 1]))
-                        bc_loss = tf.where(expert_action_best,
+                        apply_bc_loss = tf.logical_or(expert_action_best, self.q_filtering_disabled_ph)
+                        bc_loss = tf.where(apply_bc_loss,
                                            safe_x,
                                            tf.zeros([self.batch_size, 1]))
                         bc_loss = self.expert_scale * tf.reduce_mean(bc_loss) # TODO: look into issue with NaN in tf.where gradient (https://stackoverflow.com/questions/33712178/tensorflow-nan-bug/42497444#42497444)
@@ -338,9 +367,10 @@ class TD3(OffPolicyRLModel):
                     # Policy train op
                     # will be called only every n training steps,
                     # where n is the policy delay
-                    policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
-                    policy_train_op = policy_optimizer.minimize(policy_loss, var_list=get_vars('model/pi'))
-                    self.policy_train_op = policy_train_op
+                    if not self.pretrain_expert:
+                        policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
+                        policy_train_op = policy_optimizer.minimize(policy_loss, var_list=get_vars('model/pi'))
+                        self.policy_train_op = policy_train_op
 
                     # Q Values optimizer
                     qvalues_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
@@ -355,7 +385,11 @@ class TD3(OffPolicyRLModel):
                         tf.assign(target, (1 - self.tau) * target + self.tau * source)
                         for target, source in zip(target_params, source_params)
                     ]
-
+                    if self.expert_value_path is not None:
+                        source_init_op = [
+                            tf.assign(target, source)
+                            for target, source in zip(qvalues_params, expert_params)
+                        ]
                     # Initializing target to match source variables
                     target_init_op = [
                         tf.assign(target, source)
@@ -378,7 +412,7 @@ class TD3(OffPolicyRLModel):
                     tf.summary.scalar('qf2_loss', qf2_loss)
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
 
-                    if self.expert is not None:
+                    if self.expert is not None and not self.pretrain_expert:
                         tf.summary.scalar("bc_loss", bc_loss)
                         tf.summary.scalar("Q-filter", tf.reduce_mean(tf.cast(expert_action_best, dtype=tf.float32)))
 
@@ -389,6 +423,9 @@ class TD3(OffPolicyRLModel):
                 # Initialize Variables and target network
                 with self.sess.as_default():
                     self.sess.run(tf.global_variables_initializer())
+                    if self.expert_value_path is not None:
+                        self.sess.run(source_init_op)
+                        self.sess.run(expert_init_op)
                     self.sess.run(target_init_op)
 
                 self.summary = tf.summary.merge_all()
@@ -426,6 +463,8 @@ class TD3(OffPolicyRLModel):
             else:
                 obs, goals = batch_obs[:, :-3], batch_obs[:, -3:]
             feed_dict[self.expert_actions_ph] = self.expert(obs, goals)
+            if not self.pretrain_expert:
+                feed_dict[self.q_filtering_disabled_ph] = self.num_timesteps < self.expert_filtering_starts
 
         if self.recurrent_policy:
             # TODO: does this lose important gradient contributions?
@@ -456,7 +495,10 @@ class TD3(OffPolicyRLModel):
         step_ops = self.step_ops
         if update_policy:
             # Update policy and target networks
-            step_ops = step_ops + [self.policy_train_op, self.target_ops, self.policy_loss]
+            if not self.pretrain_expert:
+                step_ops = step_ops + [self.policy_train_op, self.target_ops, self.policy_loss]
+            else:
+                step_ops = step_ops + [self.target_ops]
 
         # Do one gradient step
         # and optionally compute log for tensorboard
@@ -545,7 +587,10 @@ class TD3(OffPolicyRLModel):
                         action, self.pi_state = self.policy_tf_act.step(obs[None], state=self.pi_state, goal=d_goal[None], action_prev=action_prev[None], mask=np.array(done)[None])
                         action = action.flatten()
                     else:
-                        action = self.policy_tf.step(obs[None]).flatten()
+                        if self.pretrain_expert:
+                            action = self.expert(obs[None]).flatten()
+                        else:
+                            action = self.policy_tf.step(obs[None]).flatten()
                     # Add noise to the action, as the policy
                     # is deterministic, this is required for exploration
                     if self.action_noise is not None:
