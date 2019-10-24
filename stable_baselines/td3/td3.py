@@ -64,7 +64,8 @@ class TD3(OffPolicyRLModel):
                  target_policy_noise=0.2, target_noise_clip=0.5,
                  random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, time_aware=False,
-                 recurrent_scan_length=0, expert=None, expert_scale=0, expert_filtering_starts=0, pretrain_expert=False, expert_value_path=None):
+                 recurrent_scan_length=0, expert=None, expert_scale=0, use_expert_q_filter=False,
+                 expert_filtering_starts=0, pretrain_expert=False, expert_value_path=None):
 
         super(TD3, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=TD3Policy, requires_vec_env=False, policy_kwargs=policy_kwargs)
@@ -96,6 +97,8 @@ class TD3(OffPolicyRLModel):
         self.pretrain_expert = pretrain_expert
         self.expert_filtering_starts = expert_filtering_starts
         self.expert_value_path = expert_value_path
+        self.expert_scale_ph = None
+        self.use_expert_q_filter = use_expert_q_filter
 
         self.graph = None
         self.replay_buffer = None
@@ -348,19 +351,24 @@ class TD3(OffPolicyRLModel):
                     # Policy loss: maximise q value
                     self.policy_loss = policy_loss = -rew_loss + action_loss
                     if self.expert is not None and not self.pretrain_expert:
-                        self.q_filtering_disabled_ph = tf.placeholder(tf.bool, [], name="q_filter_disabled_ph")
-                        #qf1_pi = tf.Print(qf1_pi, [qf1_pi], "Qf1_pi: ")
-                        #qf1_expert = tf.Print(qf1_expert, [qf1_expert], "Qf1_expert: ")
-                        expert_action_best = tf.logical_or(qf1_pi < qf1_expert, qf2_pi < qf2_expert)
-                        action_difference_norm = tf.norm(self.expert_actions_ph - policy_out, ord="euclidean", axis=1, keepdims=True)
+                        action_difference_norm = tf.norm(self.expert_actions_ph - policy_out, ord="euclidean", axis=1,
+                                                         keepdims=True)
                         safe_x = tf.where(action_difference_norm > 1e-5,
                                           action_difference_norm,
                                           tf.zeros([self.batch_size, 1]))
-                        apply_bc_loss = tf.logical_or(expert_action_best, self.q_filtering_disabled_ph)
-                        bc_loss = tf.where(apply_bc_loss,
-                                           safe_x,
-                                           tf.zeros([self.batch_size, 1]))
-                        bc_loss = self.expert_scale * tf.reduce_mean(bc_loss) # TODO: look into issue with NaN in tf.where gradient (https://stackoverflow.com/questions/33712178/tensorflow-nan-bug/42497444#42497444)
+                        self.expert_scale_ph = tf.placeholder(tf.float32, [], name="expert_scale_ph")
+                        if self.use_expert_q_filter:
+                            self.q_filtering_disabled_ph = tf.placeholder(tf.bool, [], name="q_filter_disabled_ph")
+                            #qf1_pi = tf.Print(qf1_pi, [qf1_pi], "Qf1_pi: ")
+                            #qf1_expert = tf.Print(qf1_expert, [qf1_expert], "Qf1_expert: ")
+                            expert_action_best = tf.logical_or(qf1_pi < qf1_expert, qf2_pi < qf2_expert)
+                            apply_bc_loss = tf.logical_or(expert_action_best, self.q_filtering_disabled_ph)
+                            bc_loss = tf.where(apply_bc_loss,
+                                               safe_x,
+                                               tf.zeros([self.batch_size, 1]))
+                        else:
+                            bc_loss = tf.reduce_mean(safe_x)
+                        bc_loss = self.expert_scale_ph * tf.reduce_mean(bc_loss) # TODO: look into issue with NaN in tf.where gradient (https://stackoverflow.com/questions/33712178/tensorflow-nan-bug/42497444#42497444)
                         #bc_loss = tf.Print(bc_loss, [tf.gradients(bc_loss, [self.expert_actions_ph])[0]])
                         self.policy_loss = policy_loss = -rew_loss + action_loss + bc_loss
 
@@ -414,7 +422,8 @@ class TD3(OffPolicyRLModel):
 
                     if self.expert is not None and not self.pretrain_expert:
                         tf.summary.scalar("bc_loss", bc_loss)
-                        tf.summary.scalar("Q-filter", tf.reduce_mean(tf.cast(expert_action_best, dtype=tf.float32)))
+                        if self.use_expert_q_filter:
+                            tf.summary.scalar("Q-filter", tf.reduce_mean(tf.cast(expert_action_best, dtype=tf.float32)))
 
                 # Retrieve parameters that must be saved
                 self.params = get_vars("model")
@@ -458,12 +467,13 @@ class TD3(OffPolicyRLModel):
         }
 
         if self.expert is not None:
+            feed_dict[self.expert_scale_ph] = self.expert_scale(self.num_timesteps)
             if self.recurrent_policy:
                 obs, goals = batch_obs, batch_goals
             else:
                 obs, goals = batch_obs[:, :-3], batch_obs[:, -3:]
             feed_dict[self.expert_actions_ph] = self.expert(obs, goals)
-            if not self.pretrain_expert:
+            if self.use_expert_q_filter and not self.pretrain_expert:
                 feed_dict[self.q_filtering_disabled_ph] = self.num_timesteps < self.expert_filtering_starts
 
         if self.recurrent_policy:
@@ -537,6 +547,7 @@ class TD3(OffPolicyRLModel):
 
             # Transform to callable if needed
             self.learning_rate = get_schedule_fn(self.learning_rate)
+            self.expert_scale = get_schedule_fn(self.expert_scale)
             # Initial learning rate
             current_lr = self.learning_rate(1)
 
