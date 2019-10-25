@@ -285,8 +285,10 @@ class TD3(OffPolicyRLModel):
                                 for target, source in zip(get_vars("expert"), expert_params)
                             ]
                     else:
-                        qf1_expert, qf2_expert = self.policy_tf.make_critics(self.processed_obs_ph,
+                        with tf.variable_scope("model", reuse=True):
+                            qf1_expert, qf2_expert = self.policy_tf.make_critics(self.processed_obs_ph,
                                                                          self.expert_actions_ph, reuse=True)
+
 
                 with tf.variable_scope("target", reuse=False):
                     if self.recurrent_policy:
@@ -467,14 +469,15 @@ class TD3(OffPolicyRLModel):
         }
 
         if self.expert is not None:
-            feed_dict[self.expert_scale_ph] = self.expert_scale(self.num_timesteps)
             if self.recurrent_policy:
                 obs, goals = batch_obs, batch_goals
             else:
                 obs, goals = batch_obs[:, :-3], batch_obs[:, -3:]
             feed_dict[self.expert_actions_ph] = self.expert(obs, goals)
-            if self.use_expert_q_filter and not self.pretrain_expert:
-                feed_dict[self.q_filtering_disabled_ph] = self.num_timesteps < self.expert_filtering_starts
+            if not self.pretrain_expert:
+                feed_dict[self.expert_scale_ph] = self.expert_scale(self.num_timesteps)
+                if self.use_expert_q_filter:
+                    feed_dict[self.q_filtering_disabled_ph] = self.num_timesteps < self.expert_filtering_starts
 
         if self.recurrent_policy:
             # TODO: does this lose important gradient contributions?
