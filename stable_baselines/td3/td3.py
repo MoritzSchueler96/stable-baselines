@@ -820,6 +820,7 @@ class TD3(OffPolicyRLModel):
         return None
 
     def predict(self, observation, state=None, mask=None, deterministic=True, action_prev=None):
+        # TODO: Maybe use target_network for test set (HER paper does this, because it is more stable)
         observation = np.array(observation)
         vectorized_env = self._is_vectorized_observation(observation, self.observation_space)
 
