@@ -121,6 +121,8 @@ def generate_expert_traj(model, save_path=None, env=None, n_timesteps=0,
             action, state = model.predict(obs, state=state, mask=mask)
         else:
             action = model(obs)
+            if len(action.shape) > 1:
+                action = action.flatten()
 
         obs, reward, done, _ = env.step(action)
 

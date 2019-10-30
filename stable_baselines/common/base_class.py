@@ -249,7 +249,8 @@ class BaseRLModel(ABC):
                     else:
                         obs_ph, actions_ph, deterministic_actions_ph = self._get_pretrain_placeholders()
                     loss = tf.reduce_mean(tf.square(actions_ph - deterministic_actions_ph))
-                    loss_vf = tf.reduce_mean(tf.square(rew_ph - vf_ph))
+                    if train_vf:
+                        loss_vf = tf.reduce_mean(tf.square(rew_ph - vf_ph))
                 else:
                     obs_ph, actions_ph, actions_logits_ph = self._get_pretrain_placeholders()
                     # actions_ph has a shape if (n_batch,), we reshape it to (n_batch, 1)
@@ -263,8 +264,9 @@ class BaseRLModel(ABC):
                     loss = tf.reduce_mean(loss)
                 optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, epsilon=adam_epsilon)
                 optim_op = optimizer.minimize(loss, var_list=self.params)
-                optimizer_vf = tf.train.AdamOptimizer(learning_rate=learning_rate, epsilon=adam_epsilon)
-                optim_op_vf = optimizer_vf.minimize(loss_vf, var_list=[var for var in self.params if var.name.startswith("model/vf")])
+                if train_vf:
+                    optimizer_vf = tf.train.AdamOptimizer(learning_rate=learning_rate, epsilon=adam_epsilon)
+                    optim_op_vf = optimizer_vf.minimize(loss_vf, var_list=[var for var in self.params if var.name.startswith("model/vf")])
 
             self.sess.run(tf.global_variables_initializer())
 
