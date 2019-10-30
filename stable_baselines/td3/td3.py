@@ -65,7 +65,8 @@ class TD3(OffPolicyRLModel):
                  random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, time_aware=False,
                  recurrent_scan_length=0, expert=None, expert_scale=0, use_expert_q_filter=False,
-                 expert_filtering_starts=0, pretrain_expert=False, expert_value_path=None):
+                 expert_filtering_starts=0, pretrain_expert=False, expert_value_path=None, clip_q_target=None,
+                 q_filter_scale_noise=False):
 
         super(TD3, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=TD3Policy, requires_vec_env=False, policy_kwargs=policy_kwargs)
@@ -99,6 +100,9 @@ class TD3(OffPolicyRLModel):
         self.expert_value_path = expert_value_path
         self.expert_scale_ph = None
         self.use_expert_q_filter = use_expert_q_filter
+
+        self.clip_q_target = clip_q_target
+        assert clip_q_target is None or len(clip_q_target) == 2
 
         self.graph = None
         self.replay_buffer = None
@@ -149,6 +153,9 @@ class TD3(OffPolicyRLModel):
 
         self.expert_actions_ph = None
         self.q_filter_ph = None
+        self.q_filter_moving_average = None
+        self.q_filter_activation_ph = None
+        self.q_filter_scale_noise = q_filter_scale_noise
 
         self.active_sampling = False
 
@@ -225,7 +232,11 @@ class TD3(OffPolicyRLModel):
                     self.actions_ph = tf.placeholder(tf.float32, shape=(None,) + self.action_space.shape,
                                                      name='actions')
                     self.learning_rate_ph = tf.placeholder(tf.float32, [], name="learning_rate_ph")
+
                     if self.expert is not None:
+                        if self.q_filter_scale_noise:
+                            self.q_filter_activation_ph = tf.placeholder(tf.float32, [], name="q_filter_activation_ph")
+                            self.q_filter_moving_average = deque(maxlen=1000)
                         self.expert_actions_ph = tf.placeholder(tf.float32, shape=(None,) + self.action_space.shape,
                                                             name="expert_actions")
 
@@ -315,10 +326,16 @@ class TD3(OffPolicyRLModel):
                         else:
                             target_policy_out = self.target_policy_tf.make_actor(self.processed_next_obs_ph)
                         # Target policy smoothing, by adding clipped noise to target actions
-                        target_noise = tf.random_normal(tf.shape(target_policy_out), stddev=self.target_policy_noise)
-                        target_noise = tf.clip_by_value(target_noise, -self.target_noise_clip, self.target_noise_clip)
-                        # Clip the noisy action to remain in the bounds [-1, 1] (output of a tanh)
-                        noisy_target_action = tf.clip_by_value(target_policy_out + target_noise, -1, 1)
+                        if self.target_policy_noise > 0:
+                            if self.q_filter_scale_noise:
+                                target_noise = tf.random_normal(tf.shape(target_policy_out), stddev=self.target_policy_noise * self.q_filter_activation_ph)
+                            else:
+                                target_noise = tf.random_normal(tf.shape(target_policy_out), stddev=self.target_policy_noise)
+                            target_noise = tf.clip_by_value(target_noise, -self.target_noise_clip, self.target_noise_clip)
+                            # Clip the noisy action to remain in the bounds [-1, 1] (output of a tanh)
+                            noisy_target_action = tf.clip_by_value(target_policy_out + target_noise, -1, 1)
+                        else:
+                            noisy_target_action = target_policy_out
                         # Q values when following the target policy
                         qf1_target, qf2_target = self.target_policy_tf.make_critics(self.processed_next_obs_ph,
                                                                                     noisy_target_action)
@@ -338,6 +355,9 @@ class TD3(OffPolicyRLModel):
                         self.rewards_ph +
                         (1 - self.terminals_ph) * self.gamma * min_qf_target
                     )
+
+                    if self.clip_q_target is not None:
+                        q_backup = tf.clip_by_value(q_backup, self.clip_q_target[0], self.clip_q_target[1], name="q_backup_clipped")
 
                     # Compute Q-Function loss
                     if self.buffer_is_prioritized:
@@ -373,6 +393,8 @@ class TD3(OffPolicyRLModel):
                             bc_loss = tf.where(apply_bc_loss,
                                                safe_x,
                                                tf.zeros([self.batch_size, 1]))
+
+                            q_filter_activation = tf.reduce_mean(tf.cast(expert_action_best, dtype=tf.float32))
                         else:
                             bc_loss = tf.reduce_mean(safe_x)
                         bc_loss = self.expert_scale_ph * tf.reduce_mean(bc_loss) # TODO: look into issue with NaN in tf.where gradient (https://stackoverflow.com/questions/33712178/tensorflow-nan-bug/42497444#42497444)
@@ -418,6 +440,9 @@ class TD3(OffPolicyRLModel):
                     self.step_ops = [qf1_loss, qf2_loss,
                                      qf1, qf2, train_values_op]#, q_discrepancy]
 
+                    if self.q_filter_scale_noise:
+                        self.step_ops.append(q_filter_activation)
+
                     # Monitor losses and entropy in tensorboard
                     tf.summary.scalar("rew_loss", rew_loss)
                     #tf.summary.scalar("q_disc_loss", q_disc_loss)
@@ -430,7 +455,7 @@ class TD3(OffPolicyRLModel):
                     if self.expert is not None and not self.pretrain_expert:
                         tf.summary.scalar("bc_loss", bc_loss)
                         if self.use_expert_q_filter:
-                            tf.summary.scalar("Q-filter", tf.reduce_mean(tf.cast(expert_action_best, dtype=tf.float32)))
+                            tf.summary.scalar("Q-filter", q_filter_activation)
 
                 # Retrieve parameters that must be saved
                 self.params = get_vars("model")
@@ -482,6 +507,8 @@ class TD3(OffPolicyRLModel):
             if not self.pretrain_expert:
                 feed_dict[self.expert_scale_ph] = self.expert_scale(self.num_timesteps)
                 if self.use_expert_q_filter:
+                    if self.q_filter_scale_noise:
+                        feed_dict[self.q_filter_activation_ph] = 1.0 - np.mean(self.q_filter_moving_average)
                     feed_dict[self.q_filtering_disabled_ph] = self.num_timesteps < self.expert_filtering_starts
 
         if self.recurrent_policy:
@@ -529,6 +556,9 @@ class TD3(OffPolicyRLModel):
 
         # Unpack to monitor losses
         #q_discrepancies = out.pop(5)
+        if self.q_filter_scale_noise:
+            q_filter_activation = out.pop(5)
+            self.q_filter_moving_average.append(q_filter_activation)
         qf1_loss, qf2_loss, *_values = out
 
         if self.buffer_is_prioritized and self.num_timesteps >= self.prioritization_starts:
@@ -586,6 +616,8 @@ class TD3(OffPolicyRLModel):
                 obs = np.concatenate([obs_dict["observation"], obs_dict["achieved_goal"]])
                 action_prev = np.zeros(shape=self.action_space.shape)
 
+            self.q_filter_moving_average.append(1)
+
             for step in range(initial_step, total_timesteps):
                 if callback is not None:
                     # Only stop training if return value is False, not when it is None. This is for backwards
@@ -613,7 +645,10 @@ class TD3(OffPolicyRLModel):
                     # Add noise to the action, as the policy
                     # is deterministic, this is required for exploration
                     if self.action_noise is not None:
-                        action = np.clip(action + self.action_noise(), -1, 1)
+                        action_noise = self.action_noise()
+                        if self.q_filter_scale_noise:
+                            action_noise *= (1.0 - np.mean(self.q_filter_moving_average))
+                        action = np.clip(action + action_noise, -1, 1)
                     # Rescale from [-1, 1] to the correct bounds
                     rescaled_action = action * np.abs(self.action_space.low)
 
