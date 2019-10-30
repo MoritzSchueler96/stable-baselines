@@ -1,5 +1,8 @@
 from collections import OrderedDict
 
+from stable_baselines.common.running_mean_std import RunningMeanStd
+import pickle
+
 import numpy as np
 from gym import spaces
 
@@ -17,12 +20,21 @@ class HERGoalEnvWrapper(object):
     :param env: (gym.GoalEnv)
     """
 
-    def __init__(self, env):
+    def __init__(self, env, norm=False, clip_obs=5):
         super(HERGoalEnvWrapper, self).__init__()
         self.env = env
         self.metadata = self.env.metadata
         self.action_space = env.action_space
         self.spaces = [env.observation_space[key] for key in KEY_ORDER]
+
+        self.norm = norm
+        self.training = True
+        self.orig_obs = None
+        self.epsilon = 1e-8
+        if norm:
+            self.obs_rms = RunningMeanStd(shape=self.observation_space.shape)
+            self.ret_rms = RunningMeanStd(shape=())
+            self.clip_obs = clip_obs
         self.multi_dimensional_obs = len(env.observation_space.spaces['observation'].shape) > 1
         # Check that all spaces are of the same type
         # (current limitation of the wrapper)
@@ -98,13 +110,50 @@ class HERGoalEnvWrapper(object):
 
     def step(self, action):
         obs, reward, done, info = self.env.step(action)
-        return self.convert_dict_to_obs(obs), reward, done, info
+        obs = self.convert_dict_to_obs(obs)
+        if self.norm:
+            self.orig_obs = obs
+            obs = self._normalize_observation(obs)
+        return obs, reward, done, info
+
+    def _normalize_observation(self, obs):
+        """
+        :param obs: (numpy tensor)
+        """
+        is_dict = False
+        if self.norm:
+            if isinstance(obs, dict):
+                is_dict = True
+                obs = self.convert_dict_to_obs(obs)
+            if self.training:
+                self.obs_rms.update(obs)
+            obs = np.clip((obs - self.obs_rms.mean) / np.sqrt(self.obs_rms.var + self.epsilon), -self.clip_obs, self.clip_obs)
+
+            if is_dict:
+                return self.convert_obs_to_dict(obs)
+            else:
+                return obs
+        else:
+            return obs
+
+    def get_original_obs(self):
+        """
+        returns the unnormalized observation
+
+        :return: (numpy float)
+        """
+        return self.orig_obs
 
     def seed(self, seed=None):
         return self.env.seed(seed)
 
     def reset(self, *args, **kwargs):
-        return self.convert_dict_to_obs(self.env.reset(*args, **kwargs))
+        obs = self.convert_dict_to_obs(self.env.reset(*args, **kwargs))
+        if self.norm:
+            self.orig_obs = obs
+            obs = self._normalize_observation(obs)
+
+        return obs
 
     def compute_reward(self, achieved_goal, desired_goal, info):
         return self.env.compute_reward(achieved_goal, desired_goal, info)
@@ -117,5 +166,31 @@ class HERGoalEnvWrapper(object):
 
     def __getattr__(self, item):
         return getattr(self.env, item)
+
+    def save_running_average(self, path, suffix=None):
+        """
+        :param path: (str) path to log dir
+        :param suffix: (str) suffix to file
+        """
+        file_names = ['obs_rms', 'ret_rms']
+        if suffix is not None:
+            file_names = [f + suffix for f in file_names]
+        for rms, name in zip([self.obs_rms, self.ret_rms], file_names):
+            with open("{}/{}.pkl".format(path, name), 'wb') as file_handler:
+                pickle.dump(rms, file_handler)
+
+    def load_running_average(self, path, suffix=None):
+        """
+        :param path: (str) path to log dir
+        :param suffix: (str) suffix to file
+        """
+
+        file_names = ['obs_rms', 'ret_rms']
+        for name in file_names:
+            open_name = name
+            if suffix is not None:
+                open_name += suffix
+            with open("{}/{}.pkl".format(path, open_name), 'rb') as file_handler:
+                setattr(self, name, pickle.load(file_handler))
 
 
