@@ -114,6 +114,7 @@ class FeedForwardPolicy(TD3Policy):
             layers = [64, 64]
         self.layers = layers
         self.obs_module_indices = obs_module_indices
+        self.policy_pre_activation = None
 
         assert len(layers) >= 1, "Error: must have at least one hidden layer for the policy."
 
@@ -133,7 +134,8 @@ class FeedForwardPolicy(TD3Policy):
 
             pi_h = mlp(pi_h, self.layers, self.activ_fn, layer_norm=self.layer_norm)
 
-            self.policy = policy = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=tf.tanh)
+            self.policy_pre_activation = tf.layers.dense(pi_h, self.ac_space.shape[0])
+            self.policy = policy = tf.tanh(self.policy_pre_activation)
 
         return policy
 
