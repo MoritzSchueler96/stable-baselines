@@ -492,8 +492,16 @@ class TD3(OffPolicyRLModel):
             if self.buffer_is_prioritized:
                 batch_weights = np.ones(shape=(self.batch_size, 1))
 
+        if getattr(self.env, "norm", False):
+            self.env.training = False
+            batch_obs_n = self.env._normalize_observation(batch_obs)
+            batch_next_obs = self.env._normalize_observation(batch_next_obs)
+            self.env.training = True
+        else:
+            batch_obs_n = batch_obs
+
         feed_dict = {
-            self.observations_ph: batch_obs,
+            self.observations_ph: batch_obs_n,
             self.actions_ph: batch_actions,
             self.next_observations_ph: batch_next_obs,
             self.rewards_ph: batch_rewards.reshape(self.batch_size, -1),
@@ -598,6 +606,9 @@ class TD3(OffPolicyRLModel):
             if self.action_noise is not None:
                 self.action_noise.reset()
             obs = self.env.reset()
+            obs_save = obs
+            if getattr(self.env, "norm", False):
+                obs_save = self.env.get_original_obs()
             self.episode_reward = np.zeros((1,))
             ep_info_buf = deque(maxlen=100)
             n_updates = 0
@@ -619,7 +630,8 @@ class TD3(OffPolicyRLModel):
                 obs = np.concatenate([obs_dict["observation"], obs_dict["achieved_goal"]])
                 action_prev = np.zeros(shape=self.action_space.shape)
 
-            self.q_filter_moving_average.append(1)
+            if self.q_filter_scale_noise:
+                self.q_filter_moving_average.append(1)
 
             for step in range(initial_step, total_timesteps):
                 if callback is not None:
@@ -678,11 +690,18 @@ class TD3(OffPolicyRLModel):
                         bootstrap = info.get("termination", None) == "steps" or info.get("TimeLimit.truncated", False)
                     else:
                         bootstrap = not done
+
+                    if getattr(self.env, "norm", False):
+                        new_obs_save = self.env.get_original_obs()
+                    else:
+                        new_obs_save = new_obs
                     try:
-                        self.replay_buffer.add(obs, action, reward, new_obs, done, bootstrap=bootstrap)
+                        self.replay_buffer.add(obs_save, action, reward, new_obs_save, done, bootstrap=bootstrap)
                     except TypeError:
-                        self.replay_buffer.add(obs, action, reward, new_obs, bootstrap)
+                        self.replay_buffer.add(obs_save, action, reward, new_obs_save, bootstrap)
                     obs = new_obs
+                    if getattr(self.env, "norm", False):
+                        obs_save = new_obs_save
 
                 if ((replay_wrapper is not None and self.replay_buffer.replay_buffer.__name__ == "RankPrioritizedReplayBuffer")\
                         or self.replay_buffer.__name__ == "RankPrioritizedReplayBuffer") and \
@@ -739,6 +758,9 @@ class TD3(OffPolicyRLModel):
                             obs = self.env.reset(**sample_state[np.argmax(obs_discrepancies)])
                         else:
                             obs = self.env.reset()
+                            obs_save = obs
+                            if getattr(self.env, "norm", False):
+                                obs_save = self.env.get_original_obs()
                             if self.recurrent_policy:
                                 obs_dict = self.env.convert_obs_to_dict(obs)
                                 d_goal = obs_dict["desired_goal"]
