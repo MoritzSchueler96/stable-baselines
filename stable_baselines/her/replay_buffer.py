@@ -77,7 +77,7 @@ class HindsightExperienceReplayWrapper(object):
         else:
             self.recurrent = False
 
-    def add(self, obs_t, action, reward, obs_tp1, done, goal=None, my=None):
+    def add(self, obs_t, action, reward, obs_tp1, done, bootstrap=None, goal=None, my=None):
         """
         add a new transition to the buffer
 
@@ -92,7 +92,7 @@ class HindsightExperienceReplayWrapper(object):
         if self.recurrent:
             self.episode_transitions.append((obs_t, action, reward, obs_tp1, done, goal, my))
         else:
-            self.episode_transitions.append((obs_t, action, reward, obs_tp1, done))
+            self.episode_transitions.append((obs_t, action, reward, obs_tp1, done if bootstrap is None else bootstrap))
         if self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
             # Store information about typical change in achieved goal (should consider if desired goal also changes)
             pass
