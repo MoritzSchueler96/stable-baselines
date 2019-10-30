@@ -273,6 +273,11 @@ class TD3(OffPolicyRLModel):
                         qf1_target, qf2_target = self.target_policy_tf.make_critics(self.processed_next_obs_ph,
                                                                                     noisy_target_action)
 
+                if self.pretrain_expert is not None:
+                    policy_pre_activation = policy_out
+                else:
+                    policy_pre_activation = self.policy_tf.policy_pre_activation
+
                 # TODO: introduce somwehere here the placeholder for history which updates internal state?
                 with tf.variable_scope("loss", reuse=False):
                     # Take the min of the two target Q-Values (clipped Double-Q Learning)
@@ -298,7 +303,7 @@ class TD3(OffPolicyRLModel):
 
                     rew_loss = tf.reduce_mean(qf1_pi)
                     #q_disc_loss = tf.reduce_mean(q_discrepancy)#self.q_disc_strength_ph * tf.reduce_mean(q_discrepancy)
-                    action_loss = self.action_l2_scale * tf.nn.l2_loss(self.policy_out)
+                    action_loss = self.action_l2_scale * tf.nn.l2_loss(policy_pre_activation)
 
                     # Policy loss: maximise q value
                     self.policy_loss = policy_loss = -rew_loss + action_loss
