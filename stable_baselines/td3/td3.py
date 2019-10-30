@@ -502,10 +502,14 @@ class TD3(OffPolicyRLModel):
         }
 
         if self.expert is not None:
-            if self.recurrent_policy:
-                obs, goals = batch_obs, batch_goals
+            if getattr(self.env, "norm", False):
+                batch_obs_expert = self.env.unnormalize_observation(batch_obs)
             else:
-                obs, goals = batch_obs[:, :-3], batch_obs[:, -3:]
+                batch_obs_expert = batch_obs
+            if self.recurrent_policy:
+                obs, goals = batch_obs_expert, batch_goals
+            else:
+                obs, goals = batch_obs_expert[:, :-3], batch_obs_expert[:, -3:]
             feed_dict[self.expert_actions_ph] = self.expert(obs, goals)
             if not self.pretrain_expert:
                 feed_dict[self.expert_scale_ph] = self.expert_scale(self.num_timesteps)
@@ -643,7 +647,11 @@ class TD3(OffPolicyRLModel):
                         action = action.flatten()
                     else:
                         if self.pretrain_expert:
-                            action = self.expert(obs[None]).flatten()
+                            if getattr(self.env, "norm", False):
+                                expert_obs = self.env.unnormalize_observation(obs)
+                            else:
+                                expert_obs = obs
+                            action = self.expert(expert_obs[None]).flatten()
                         else:
                             action = self.policy_tf.step(obs[None]).flatten()
                     # Add noise to the action, as the policy
