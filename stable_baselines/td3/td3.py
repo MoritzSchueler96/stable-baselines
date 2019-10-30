@@ -625,12 +625,20 @@ class TD3(OffPolicyRLModel):
                     d_goal = new_obs["desired_goal"]
                     new_obs = np.concatenate([new_obs["observation"], new_obs["achieved_goal"]])
                     if done:
+                        #term_steps = info.get("termination", None) == "steps" or info.get("TimeLimit.truncated", False)
                         self.replay_buffer.add(obs, action, reward, new_obs, done, d_goal, self._get_env_parameters())
                     else:
                         self.replay_buffer.add(obs, action, reward, new_obs, done, d_goal)
                     obs = new_obs
                 else:
-                    self.replay_buffer.add(obs, action, reward, new_obs, float(done if not self.time_aware else done and info["termination"] != "steps"))
+                    if done:
+                        bootstrap = info.get("termination", None) == "steps" or info.get("TimeLimit.truncated", False)
+                    else:
+                        bootstrap = not done
+                    try:
+                        self.replay_buffer.add(obs, action, reward, new_obs, done, bootstrap=bootstrap)
+                    except TypeError:
+                        self.replay_buffer.add(obs, action, reward, new_obs, bootstrap)
                     obs = new_obs
 
                 if ((replay_wrapper is not None and self.replay_buffer.replay_buffer.__name__ == "RankPrioritizedReplayBuffer")\
