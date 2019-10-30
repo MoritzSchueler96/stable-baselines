@@ -619,7 +619,7 @@ class TD3(OffPolicyRLModel):
                 obs = np.concatenate([obs_dict["observation"], obs_dict["achieved_goal"]])
                 action_prev = np.zeros(shape=self.action_space.shape)
 
-            if self.q_filter_scale_noise:
+            if self.q_filter_scale_noise and len(self.q_filter_moving_average) == 0:
                 self.q_filter_moving_average.append(1)
 
             for step in range(initial_step, total_timesteps):
