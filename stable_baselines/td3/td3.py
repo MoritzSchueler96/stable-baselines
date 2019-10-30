@@ -64,7 +64,7 @@ class TD3(OffPolicyRLModel):
                  target_policy_noise=0.2, target_noise_clip=0.5,
                  random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, time_aware=False,
-                 recurrent_scan_length=0, expert=None, expert_scale=0, use_expert_q_filter=False,
+                 recurrent_scan_length=0, expert=None, expert_scale=0, expert_q_filter=None,
                  expert_filtering_starts=0, pretrain_expert=False, expert_value_path=None, clip_q_target=None,
                  q_filter_scale_noise=False):
 
@@ -99,7 +99,8 @@ class TD3(OffPolicyRLModel):
         self.expert_filtering_starts = expert_filtering_starts
         self.expert_value_path = expert_value_path
         self.expert_scale_ph = None
-        self.use_expert_q_filter = use_expert_q_filter
+        assert expert_q_filter in [None, "expert", "own"]
+        self.expert_q_filter = expert_q_filter
 
         self.clip_q_target = clip_q_target
         assert clip_q_target is None or len(clip_q_target) == 2
@@ -281,25 +282,27 @@ class TD3(OffPolicyRLModel):
                         qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph,
                                                                 policy_out, reuse=True)
 
-                #self.qf1 = qf1_pi
-                #self.qf2 = qf2_pi
                 if self.expert is not None and not self.pretrain_expert:
                     if self.expert_value_path is not None:
-                        with tf.variable_scope("expert", reuse=False):
-                            self.expert_tf = self.policy(self.sess, self.observation_space, self.action_space, **self.policy_kwargs)
-                            qf1_expert, qf2_expert = self.expert_tf.make_critics(self.processed_obs_ph, self.expert_actions_ph)
-                            _, expert_params = self._load_from_file(self.expert_value_path)
-                            expert_params = [val for key, val in expert_params.items() if "model/values_fn" in key]
+                        if self.expert_q_filter == "own":
+                            with tf.variable_scope("model", reuse=True):
+                                qf1_expert, qf2_expert = self.policy_tf.make_critics(self.processed_obs_ph,
+                                                                                     self.expert_actions_ph, reuse=True)
+                        elif self.expert_q_filter == "expert":
+                            with tf.variable_scope("expert", reuse=False):
+                                self.expert_tf = self.policy(self.sess, self.observation_space, self.action_space, **self.policy_kwargs)
+                                qf1_expert, qf2_expert = self.expert_tf.make_critics(self.processed_obs_ph, self.expert_actions_ph)
+                        _, expert_params = self._load_from_file(self.expert_value_path)
+                        expert_params = [val for key, val in expert_params.items() if "model/values_fn" in key]
 
-                            expert_init_op = [
-                                tf.assign(target, source)
-                                for target, source in zip(get_vars("expert"), expert_params)
-                            ]
+                        expert_init_op = [
+                            tf.assign(target, source)
+                            for target, source in zip(get_vars("expert"), expert_params)
+                        ]
                     else:
                         with tf.variable_scope("model", reuse=True):
                             qf1_expert, qf2_expert = self.policy_tf.make_critics(self.processed_obs_ph,
                                                                          self.expert_actions_ph, reuse=True)
-
 
                 with tf.variable_scope("target", reuse=False):
                     if self.recurrent_policy:
@@ -384,7 +387,7 @@ class TD3(OffPolicyRLModel):
                                           action_difference_norm,
                                           tf.zeros([self.batch_size, 1]))
                         self.expert_scale_ph = tf.placeholder(tf.float32, [], name="expert_scale_ph")
-                        if self.use_expert_q_filter:
+                        if self.expert_q_filter is not None:
                             self.q_filtering_disabled_ph = tf.placeholder(tf.bool, [], name="q_filter_disabled_ph")
                             #qf1_pi = tf.Print(qf1_pi, [qf1_pi], "Qf1_pi: ")
                             #qf1_expert = tf.Print(qf1_expert, [qf1_expert], "Qf1_expert: ")
@@ -454,7 +457,7 @@ class TD3(OffPolicyRLModel):
 
                     if self.expert is not None and not self.pretrain_expert:
                         tf.summary.scalar("bc_loss", bc_loss)
-                        if self.use_expert_q_filter:
+                        if self.expert_q_filter is not None:
                             tf.summary.scalar("Q-filter", q_filter_activation)
 
                 # Retrieve parameters that must be saved
@@ -506,7 +509,7 @@ class TD3(OffPolicyRLModel):
             feed_dict[self.expert_actions_ph] = self.expert(obs, goals)
             if not self.pretrain_expert:
                 feed_dict[self.expert_scale_ph] = self.expert_scale(self.num_timesteps)
-                if self.use_expert_q_filter:
+                if self.expert_q_filter is not None:
                     if self.q_filter_scale_noise:
                         feed_dict[self.q_filter_activation_ph] = 1.0 - np.mean(self.q_filter_moving_average)
                     feed_dict[self.q_filtering_disabled_ph] = self.num_timesteps < self.expert_filtering_starts
