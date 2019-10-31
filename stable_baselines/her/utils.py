@@ -1,6 +1,6 @@
 from collections import OrderedDict
 
-from stable_baselines.common.running_mean_std import RunningMeanStd
+from stable_baselines.common.running_mean_std import RunningMeanStdSerial
 import pickle
 
 import numpy as np
@@ -27,14 +27,6 @@ class HERGoalEnvWrapper(object):
         self.action_space = env.action_space
         self.spaces = [env.observation_space[key] for key in KEY_ORDER]
 
-        self.norm = norm
-        self.training = True
-        self.orig_obs = None
-        self.epsilon = 1e-8
-        if norm:
-            self.obs_rms = RunningMeanStd(shape=self.observation_space.shape)
-            self.ret_rms = RunningMeanStd(shape=())
-            self.clip_obs = clip_obs
         self.multi_dimensional_obs = len(env.observation_space.spaces['observation'].shape) > 1
         # Check that all spaces are of the same type
         # (current limitation of the wrapper)
@@ -74,6 +66,15 @@ class HERGoalEnvWrapper(object):
 
         else:
             raise NotImplementedError("{} space is not supported".format(type(self.spaces[0])))
+
+        self.norm = norm
+        self.training = True
+        self.orig_obs = None
+        self.epsilon = 1e-2
+        if norm:
+            self.obs_rms = RunningMeanStdSerial(shape=self.observation_space.shape)
+            self.ret_rms = RunningMeanStdSerial(shape=())
+            self.clip_obs = clip_obs
 
     def convert_dict_to_obs(self, obs_dict):
         """
@@ -190,7 +191,7 @@ class HERGoalEnvWrapper(object):
         if suffix is not None:
             file_names = [f + suffix for f in file_names]
         for rms, name in zip([self.obs_rms, self.ret_rms], file_names):
-            with open("{}/{}.pkl".format(path, name), 'wb') as file_handler:
+            with open("{}_{}.pkl".format(path, name), 'wb') as file_handler:
                 pickle.dump(rms, file_handler)
 
     def load_running_average(self, path, suffix=None):
@@ -204,7 +205,7 @@ class HERGoalEnvWrapper(object):
             open_name = name
             if suffix is not None:
                 open_name += suffix
-            with open("{}/{}.pkl".format(path, open_name), 'rb') as file_handler:
+            with open("{}_{}.pkl".format(path, open_name), 'rb') as file_handler:
                 setattr(self, name, pickle.load(file_handler))
 
 
