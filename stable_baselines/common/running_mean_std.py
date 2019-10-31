@@ -38,3 +38,29 @@ class RunningMeanStd(object):
         self.mean = new_mean
         self.var = new_var
         self.count = new_count
+        
+        
+class RunningMeanStdSerial(object):
+    def __init__(self, epsilon=1e-4, shape=(), mean_mask=None):
+        """
+        calulates the running mean and std of a data stream
+        https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
+
+        :param epsilon: (float) helps with arithmetic issues
+        :param shape: (tuple) the shape of the data stream's output
+        """
+        self.mean = np.zeros(shape, 'float64')
+        self.var = np.ones(shape, 'float64')
+        self.count = epsilon
+        self.mean_mask = mean_mask
+        self.m2 = np.zeros(shape, "float64")
+
+    def update(self, arr):
+        delta = arr - self.mean
+        self.count += 1
+        
+        self.mean += delta / self.count
+        delta2 = arr - self.mean
+        self.m2 += delta * delta2
+        self.var = self.m2 / self.count
+        
