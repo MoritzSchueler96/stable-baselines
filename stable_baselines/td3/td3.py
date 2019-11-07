@@ -522,27 +522,26 @@ class TD3(OffPolicyRLModel):
                 new_obs, reward, done, info = self.env.step(rescaled_action)
 
                 # Store transition in the replay buffer.
+                extra_data = {}
                 if self.recurrent_policy:
                     action_prev = action
                     new_obs = self.env.convert_obs_to_dict(new_obs)
                     d_goal = new_obs["desired_goal"]
                     new_obs = np.concatenate([new_obs["observation"], new_obs["achieved_goal"]])
+                    extra_data["goal"] = d_goal
                     if done:
-                        #term_steps = info.get("termination", None) == "steps" or info.get("TimeLimit.truncated", False)
-                        self.replay_buffer.add(obs, action, reward, new_obs, done, goal=d_goal, my=self._get_env_parameters())
-                    else:
-                        self.replay_buffer.add(obs, action, reward, new_obs, done, goal=d_goal)
-                    obs = new_obs
-                else:
+                        extra_data["my"] = self._get_env_parameters()
+                if self.time_aware:
                     if done:
                         bootstrap = info.get("termination", None) == "steps" or info.get("TimeLimit.truncated", False)
                     else:
                         bootstrap = not done
-                    try:
-                        self.replay_buffer.add(obs, action, reward, new_obs, done, bootstrap=bootstrap)
-                    except TypeError:
-                        self.replay_buffer.add(obs, action, reward, new_obs, bootstrap)
-                    obs = new_obs
+                    if isinstance(self.replay_buffer, HindsightExperienceReplayWrapper):
+                        extra_data["bootstrap"] = bootstrap
+                    else:
+                        done = bootstrap
+                self.replay_buffer.add(obs, action, reward, new_obs, done, **extra_data)
+                obs = new_obs
 
                 if ((replay_wrapper is not None and self.replay_buffer.replay_buffer.__name__ == "RankPrioritizedReplayBuffer")\
                         or self.replay_buffer.__name__ == "RankPrioritizedReplayBuffer") and \
