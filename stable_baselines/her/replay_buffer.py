@@ -54,7 +54,7 @@ class HindsightExperienceReplayWrapper(object):
     """
     __name__ = "HindsightExperienceReplayWrapper"
 
-    def __init__(self, replay_buffer, n_sampled_goal, goal_selection_strategy, wrapped_env):
+    def __init__(self, replay_buffer, n_sampled_goal, goal_selection_strategy, wrapped_env, her_starts=None, require_change=True):
         super(HindsightExperienceReplayWrapper, self).__init__()
 
         assert isinstance(goal_selection_strategy, GoalSelectionStrategy), "Invalid goal selection strategy," \
@@ -203,7 +203,12 @@ class HindsightExperienceReplayWrapper(object):
             else:
                 self.replay_buffer.add(obs_t, action, reward, obs_tp1, done, *extra_data)
 
+            if self.her_starts is not None and not self.use_her:
+                if len(self.replay_buffer) <= self.her_starts:
+                    self.use_her = False
+                    continue
                 else:
+                    self.use_her = True
 
             if self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE and (self.stable_indices.shape[0] == 0 or transition_idx >= self.stable_indices[-1]):
                 continue
@@ -214,11 +219,14 @@ class HindsightExperienceReplayWrapper(object):
             elif transition_idx >= len(self.episode_transitions) - 2 and self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
                 continue
 
+            # TODO: HER REQUIRE CHANGE IN STATE
+
             # Sampled n goals per transition, where n is `n_sampled_goal`
             # this is called k in the paper
             sampled_goals = self._sample_achieved_goals(self.episode_transitions, transition_idx)
             # For each sampled goals, store a new transition
-            for goal in sampled_goals:
+            
+            for goal in sampled_goals: 
                 # Copy transition to avoid modifying the original one
                 if self.recurrent:
                     obs, action, reward, next_obs, done, _, _ = copy.deepcopy(transition)
@@ -227,6 +235,9 @@ class HindsightExperienceReplayWrapper(object):
 
                 # Convert concatenated obs to dict, so we can update the goals
                 obs_dict, next_obs_dict = map(self.env.convert_obs_to_dict, (obs, next_obs))
+
+                if self.require_change and np.linalg.norm(obs_dict["achieved_goal"] - goal) < 0.005:
+                    continue
 
                 # Update the desired goal in the transition
                 obs_dict['desired_goal'] = goal
@@ -242,6 +253,8 @@ class HindsightExperienceReplayWrapper(object):
                     desired_goal = goal[0]
                 info = {"step": transition_idx, "prev_state": prev_state, "action": action}
                 reward = self.env.compute_reward(achieved_goal, desired_goal, info)
+                if self.reward_transformation is not None:
+                    reward = self.reward_transformation(reward)
                 # Can we use achieved_goal == desired_goal?
                 done = False
 
