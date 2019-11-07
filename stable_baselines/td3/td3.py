@@ -66,7 +66,7 @@ class TD3(OffPolicyRLModel):
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, time_aware=False,
                  recurrent_scan_length=0, expert=None, expert_scale=0, expert_q_filter=None,
                  expert_filtering_starts=0, pretrain_expert=False, expert_value_path=None, clip_q_target=None,
-                 q_filter_scale_noise=False):
+                 q_filter_scale_noise=False, reward_transformation=None, initialize_from_expert=False):
 
         super(TD3, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=TD3Policy, requires_vec_env=False, policy_kwargs=policy_kwargs)
@@ -101,9 +101,12 @@ class TD3(OffPolicyRLModel):
         self.expert_scale_ph = None
         assert expert_q_filter in [None, "expert", "own"]
         self.expert_q_filter = expert_q_filter
+        self.initialize_from_expert = initialize_from_expert
 
         self.clip_q_target = clip_q_target
         assert clip_q_target is None or len(clip_q_target) == 2
+        
+        self.reward_transformation = reward_transformation
 
         self.graph = None
         self.replay_buffer = None
@@ -425,7 +428,7 @@ class TD3(OffPolicyRLModel):
                         tf.assign(target, (1 - self.tau) * target + self.tau * source)
                         for target, source in zip(target_params, source_params)
                     ]
-                    if self.expert_value_path is not None:
+                    if self.initialize_from_expert:
                         source_init_op = [
                             tf.assign(target, source)
                             for target, source in zip(qvalues_params, expert_params)
@@ -467,8 +470,9 @@ class TD3(OffPolicyRLModel):
                 # Initialize Variables and target network
                 with self.sess.as_default():
                     self.sess.run(tf.global_variables_initializer())
-                    if self.expert_value_path is not None:
+                    if self.initialize_from_expert:
                         self.sess.run(source_init_op)
+                    if self.expert_value_path:
                         self.sess.run(expert_init_op)
                     self.sess.run(target_init_op)
 
@@ -486,6 +490,9 @@ class TD3(OffPolicyRLModel):
             batch = self.replay_buffer.sample(self.batch_size)
             batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, batch_goals, batch_hist_o, batch_hist_a, batch_mys \
                 = batch
+        elif self.expert is not None and not self.pretrain_expert:
+            batch = self.replay_buffer.sample(self.batch_size)
+            batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, batch_expert_actions = batch
         else:
             batch = self.replay_buffer.sample(self.batch_size)
             batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
@@ -502,16 +509,10 @@ class TD3(OffPolicyRLModel):
         }
 
         if self.expert is not None:
-            if getattr(self.env, "norm", False):
-                batch_obs_expert = self.env.unnormalize_observation(batch_obs)
+            if self.pretrain_expert:
+                feed_dict[self.expert_actions_ph] = batch_actions
             else:
-                batch_obs_expert = batch_obs
-            if self.recurrent_policy:
-                obs, goals = batch_obs_expert, batch_goals
-            else:
-                obs, goals = batch_obs_expert[:, :-3], batch_obs_expert[:, -3:]
-            feed_dict[self.expert_actions_ph] = self.expert(obs, goals)
-            if not self.pretrain_expert:
+                feed_dict[self.expert_actions_ph] = batch_expert_actions
                 feed_dict[self.expert_scale_ph] = self.expert_scale(self.num_timesteps)
                 if self.expert_q_filter is not None:
                     if self.q_filter_scale_noise:
@@ -584,6 +585,12 @@ class TD3(OffPolicyRLModel):
 
         if replay_wrapper is not None:
             self.replay_buffer = replay_wrapper(self.replay_buffer)
+
+        if self.reward_transformation is not None:
+            try:
+                self.replay_buffer.reward_transformation = self.reward_transformation
+            except:
+                pass
 
         with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
                 as writer:
@@ -669,6 +676,11 @@ class TD3(OffPolicyRLModel):
                 assert action.shape == self.env.action_space.shape
 
                 new_obs, reward, done, info = self.env.step(rescaled_action)
+
+                # TODO: CAN PRECOMPUTE EXPERT Q-VALUE
+                
+                if self.reward_transformation is not None:
+                    reward = self.reward_transformation(reward)
 
                 # Store transition in the replay buffer.
                 extra_data = {}
