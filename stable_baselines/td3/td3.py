@@ -102,6 +102,7 @@ class TD3(OffPolicyRLModel):
         assert expert_q_filter in [None, "expert", "own"]
         self.expert_q_filter = expert_q_filter
         self.initialize_from_expert = initialize_from_expert
+        assert not initialize_from_expert or expert_value_path is not None
 
         self.clip_q_target = clip_q_target
         assert clip_q_target is None or len(clip_q_target) == 2
@@ -284,9 +285,11 @@ class TD3(OffPolicyRLModel):
                         # Q value when following the current policy
                         qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph,
                                                                 policy_out, reuse=True)
-
-                if self.expert is not None and not self.pretrain_expert:
-                    if self.expert_value_path is not None:
+                
+                if self.expert_value_path is not None:
+                    _, expert_params = self._load_from_file(self.expert_value_path)
+                    expert_params = [val for key, val in expert_params.items() if "model/values_fn" in key]
+                    if self.expert is not None:
                         if self.expert_q_filter == "own":
                             with tf.variable_scope("model", reuse=True):
                                 qf1_expert, qf2_expert = self.policy_tf.make_critics(self.processed_obs_ph,
@@ -295,17 +298,16 @@ class TD3(OffPolicyRLModel):
                             with tf.variable_scope("expert", reuse=False):
                                 self.expert_tf = self.policy(self.sess, self.observation_space, self.action_space, **self.policy_kwargs)
                                 qf1_expert, qf2_expert = self.expert_tf.make_critics(self.processed_obs_ph, self.expert_actions_ph)
-                        _, expert_params = self._load_from_file(self.expert_value_path)
-                        expert_params = [val for key, val in expert_params.items() if "model/values_fn" in key]
+                        
+                            expert_init_op = [
+                                tf.assign(target, source)
+                                for target, source in zip(get_vars("expert"), expert_params)
+                            ]
+                elif self.expert is not None:
+                    with tf.variable_scope("model", reuse=True):
+                        qf1_expert, qf2_expert = self.policy_tf.make_critics(self.processed_obs_ph,
+                                                                     self.expert_actions_ph, reuse=True)
 
-                        expert_init_op = [
-                            tf.assign(target, source)
-                            for target, source in zip(get_vars("expert"), expert_params)
-                        ]
-                    else:
-                        with tf.variable_scope("model", reuse=True):
-                            qf1_expert, qf2_expert = self.policy_tf.make_critics(self.processed_obs_ph,
-                                                                         self.expert_actions_ph, reuse=True)
 
                 with tf.variable_scope("target", reuse=False):
                     if self.recurrent_policy:
@@ -472,7 +474,7 @@ class TD3(OffPolicyRLModel):
                     self.sess.run(tf.global_variables_initializer())
                     if self.initialize_from_expert:
                         self.sess.run(source_init_op)
-                    if self.expert_value_path:
+                    if self.expert_value_path is not None and self.expert_q_filter == "expert":
                         self.sess.run(expert_init_op)
                     self.sess.run(target_init_op)
 
