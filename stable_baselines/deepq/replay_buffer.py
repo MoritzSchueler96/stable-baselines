@@ -96,6 +96,50 @@ class ReplayBuffer(object):
         idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]
         return self._encode_sample(idxes)
 
+
+class ExpertReplayBuffer(ReplayBuffer):
+    __name__ = "ExpertReplayBuffer"
+
+    def __init__(self, size):
+        """
+        Implements a ring buffer (FIFO).
+
+        :param size: (int)  Max number of transitions to store in the buffer. When the buffer overflows the old
+            memories are dropped.
+        """
+        super(ExpertReplayBuffer, self).__init__(size)
+        
+    def add(self, obs_t, action, reward, obs_tp1, done, expert_action):
+        """
+        add a new transition to the buffer
+
+        :param obs_t: (Any) the last observation
+        :param action: ([float]) the action
+        :param reward: (float) the reward of the transition
+        :param obs_tp1: (Any) the current observation
+        :param done: (bool) is the episode done
+        """
+        data = (obs_t, action, reward, obs_tp1, done, expert_action)
+
+        if self._next_idx >= len(self._storage):
+            self._storage.append(data)
+        else:
+            self._storage[self._next_idx] = data
+        self._next_idx = (self._next_idx + 1) % self._maxsize
+
+    def _encode_sample(self, idxes):
+        obses_t, actions, rewards, obses_tp1, dones, expert_actions = [], [], [], [], [], []
+        for i in idxes:
+            data = self._storage[i]
+            obs_t, action, reward, obs_tp1, done, expert_action = data
+            obses_t.append(np.array(obs_t, copy=False))
+            actions.append(np.array(action, copy=False))
+            rewards.append(reward)
+            obses_tp1.append(np.array(obs_tp1, copy=False))
+            dones.append(done)
+            expert_actions.append(expert_action)
+        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), np.array(expert_actions)
+
 # TODO: add for dynamics randomization which also takes in my, and support for HER?
 class RecurrentReplayBuffer(ReplayBuffer):
     __name__ = "RecurrentReplayBuffer"
