@@ -66,7 +66,7 @@ class TD3(OffPolicyRLModel):
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, time_aware=False,
                  recurrent_scan_length=0, expert=None, expert_scale=0, expert_q_filter=None,
                  expert_filtering_starts=0, pretrain_expert=False, expert_value_path=None, clip_q_target=None,
-                 q_filter_scale_noise=False, reward_transformation=None, initialize_from_expert=False):
+                 q_filter_scale_noise=False, reward_transformation=None, initialize_from_expert=False, exploration="agent"):
 
         super(TD3, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=TD3Policy, requires_vec_env=False, policy_kwargs=policy_kwargs)
@@ -103,6 +103,7 @@ class TD3(OffPolicyRLModel):
         self.expert_q_filter = expert_q_filter
         self.initialize_from_expert = initialize_from_expert
         assert not initialize_from_expert or expert_value_path is not None
+        self.exploration = exploration
 
         self.clip_q_target = clip_q_target
         assert clip_q_target is None or len(clip_q_target) == 2
