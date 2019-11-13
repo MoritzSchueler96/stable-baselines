@@ -611,6 +611,10 @@ class TD3(OffPolicyRLModel):
             if self.action_noise is not None:
                 self.action_noise.reset()
             obs = self.env.reset()
+
+            if getattr(self.env, "norm", False):
+                original_obs = self.env.get_original_obs()
+
             self.episode_reward = np.zeros((1,))
             ep_info_buf = deque(maxlen=100)
             n_updates = 0
@@ -646,6 +650,12 @@ class TD3(OffPolicyRLModel):
                 # from a uniform distribution for better exploration.
                 # Afterwards, use the learned policy
                 # if random_exploration is set to 0 (normal setting)
+                if self.expert is not None:
+                    if getattr(self.env, "norm", False):
+                        original_obs = self.env.get_original_obs()
+                    else:
+                        original_obs = obs
+                    expert_action = self.expert(original_obs[None]).flatten()
                 if (self.num_timesteps < self.learning_starts
                         or np.random.rand() < self.random_exploration):
                     # No need to rescale when sampling random action
@@ -656,11 +666,13 @@ class TD3(OffPolicyRLModel):
                         action = action.flatten()
                     else:
                         if self.pretrain_expert:
-                            if getattr(self.env, "norm", False):
-                                expert_obs = self.env.unnormalize_observation(obs)
+                            action = expert_action
+                        elif self.exploration in ["expert", "q-filter"]:
+                            agent_score, expert_score = self.sess.run([self.qf1_pi, self.qf1_expert], {self.observations_ph: obs[None], self.expert_actions_ph: action[None]})
+                            if agent_score >= expert_score:
+                                action = self.policy_tf.step(obs[None]).flatten()
                             else:
-                                expert_obs = obs
-                            action = self.expert(expert_obs[None]).flatten()
+                                action = expert_action
                         else:
                             action = self.policy_tf.step(obs[None]).flatten()
                     # Add noise to the action, as the policy
@@ -695,13 +707,13 @@ class TD3(OffPolicyRLModel):
                     if done:
                         extra_data["my"] = self._get_env_parameters()
                 if self.expert is not None and not self.pretrain_expert:
-                    if getattr(self.env, "norm", None) is not None:
-                        if getattr(self.env, "norm", False):
-                            expert_obs = self.env.unnormalize_observation(obs)
-                        else:
-                            expert_obs = obs
-                    expert_action = self.expert(expert_obs[None]).flatten()
-                    extra_data["expert_action"] = expert_action
+                    if getattr(self.env, "norm", False):  # If norm, first get action from obs (not new_obs)
+                        extra_data["expert_action"] = expert_action
+                        extra_data["original_obs"] = original_obs
+                        original_obs = self.env.get_original_obs()  # get unnormalized new_obs
+                        extra_data["original_obs_new"] = original_obs
+                    else:
+                        extra_data["expert_action"] = expert_action
                 if self.time_aware:
                     if done:
                         bootstrap = info.get("termination", None) == "steps" or info.get("TimeLimit.truncated", False)
@@ -774,6 +786,8 @@ class TD3(OffPolicyRLModel):
                                 d_goal = obs_dict["desired_goal"]
                                 obs = np.concatenate([obs_dict["observation"], obs_dict["achieved_goal"]])
                                 action_prev = np.zeros(shape=self.action_space.shape)
+                        if getattr(self.env, "norm", False):
+                            original_obs = self.env.get_original_obs()
                     episode_rewards.append(0.0)
 
                     maybe_is_success = info.get('is_success')

@@ -73,8 +73,9 @@ class HindsightExperienceReplayWrapper(object):
         self.replay_buffer = replay_buffer
         self.her_starts = her_starts
         self.use_her = False
-        self.require_change = True
+        self.require_change = require_change
         self.reward_transformation = None
+        self.original_obs = []
 
         if replay_buffer.__name__ == "DRRecurrentReplayBuffer":
             self.recurrent = True
@@ -92,6 +93,8 @@ class HindsightExperienceReplayWrapper(object):
         :param done: (bool) is the episode done
         """
         assert self.replay_buffer is not None
+        if getattr(self.env, "norm", False):
+            self.original_obs.append((extra_data.pop("original_obs", None), extra_data.pop("original_obs_new", None)))
         # Update current episode buffer
         self.episode_transitions.append((obs_t, action, reward, obs_tp1, done if bootstrap is None else not bootstrap, *extra_data.values()))
         if self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
@@ -102,6 +105,7 @@ class HindsightExperienceReplayWrapper(object):
             self._store_episode()
             # Reset episode buffer
             self.episode_transitions = []
+            self.original_obs = []
 
     def sample(self, *args, **kwargs):
         return self.replay_buffer.sample(*args, **kwargs)
@@ -149,7 +153,7 @@ class HindsightExperienceReplayWrapper(object):
         else:
             raise ValueError("Invalid goal selection strategy,"
                              "please use one of {}".format(list(GoalSelectionStrategy)))
-        return self.env.convert_obs_to_dict(selected_transition[0])['achieved_goal']
+        return selected_idx, self.env.convert_obs_to_dict(selected_transition[0])['achieved_goal']
 
     def _sample_achieved_goals(self, episode_transitions, transition_idx):
         """
@@ -219,14 +223,14 @@ class HindsightExperienceReplayWrapper(object):
             elif transition_idx >= len(self.episode_transitions) - 2 and self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
                 continue
 
-            # TODO: HER REQUIRE CHANGE IN STATE
+            # TODO: FIX NORMALZIATION (AND FINISH REQUIRE CHANGE)
 
             # Sampled n goals per transition, where n is `n_sampled_goal`
             # this is called k in the paper
             sampled_goals = self._sample_achieved_goals(self.episode_transitions, transition_idx)
             # For each sampled goals, store a new transition
             
-            for goal in sampled_goals: 
+            for sampled_transition_i, goal in sampled_goals:
                 # Copy transition to avoid modifying the original one
                 if self.recurrent:
                     obs, action, reward, next_obs, done, _, _ = copy.deepcopy(transition)
@@ -245,14 +249,19 @@ class HindsightExperienceReplayWrapper(object):
 
                 # Update the reward according to the new desired goal
                 prev_state = obs_dict["achieved_goal"]
-                achieved_goal = next_obs_dict['achieved_goal']
-                desired_goal = goal
+                if getattr(self.env, "norm", False) and self.original_obs[sampled_transition_i][1] is not None:
+                    achieved_goal = self.env.convert_obs_to_dict(self.original_obs[transition_idx][1])["achieved_goal"]
+                    desired_goal = self.env.convert_obs_to_dict(self.original_obs[sampled_transition_i][1])["desired_goal"]
+                else:
+                    achieved_goal = next_obs_dict['achieved_goal']
+                    desired_goal = goal
                 if self.env.multi_dimensional_obs:
                     prev_state = prev_state[0]
                     achieved_goal = achieved_goal[0]
                     desired_goal = goal[0]
                 info = {"step": transition_idx, "prev_state": prev_state, "action": action}
                 reward = self.env.compute_reward(achieved_goal, desired_goal, info)
+
                 if self.reward_transformation is not None:
                     reward = self.reward_transformation(reward)
                 # Can we use achieved_goal == desired_goal?

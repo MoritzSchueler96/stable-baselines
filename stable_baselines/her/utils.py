@@ -114,10 +114,10 @@ class HERGoalEnvWrapper(object):
         obs = self.convert_dict_to_obs(obs)
         if self.norm:
             self.orig_obs = obs
-            obs = self.normalize_observation(obs)
+            obs = self.normalize_observation(obs, update=True)
         return obs, reward, done, info
 
-    def normalize_observation(self, obs):
+    def normalize_observation(self, obs, update=False):
         """
         :param obs: (numpy tensor)
         """
@@ -126,7 +126,7 @@ class HERGoalEnvWrapper(object):
             if isinstance(obs, dict):
                 is_dict = True
                 obs = self.convert_dict_to_obs(obs)
-            if self.training:
+            if self.training and update:
                 self.obs_rms.update(obs)
             obs = np.clip((obs - self.obs_rms.mean) / np.sqrt(self.obs_rms.var + self.epsilon), -self.clip_obs, self.clip_obs)
 
@@ -136,6 +136,15 @@ class HERGoalEnvWrapper(object):
                 return obs
         else:
             return obs
+
+    def unnormalize_goal(self, goal, goal_type):
+        if goal_type == "desired":
+            idx_range = (self.obs_dim + self.goal_dim, None)
+        elif goal_type == "achieved":
+            idx_range = (self.obs_dim, self.obs_dim + self.goal_dim)
+        else:
+            raise ValueError
+        return goal * np.sqrt(self.obs_rms.var[idx_range[0]:idx_range[1]] + self.epsilon) + self.obs_rms.mean[idx_range[0]:idx_range[1]]
 
     def unnormalize_observation(self, obs):
         if self.norm:
@@ -166,7 +175,7 @@ class HERGoalEnvWrapper(object):
         obs = self.convert_dict_to_obs(self.env.reset(*args, **kwargs))
         if self.norm:
             self.orig_obs = obs
-            obs = self.normalize_observation(obs)
+            obs = self.normalize_observation(obs, update=True)
 
         return obs
 
