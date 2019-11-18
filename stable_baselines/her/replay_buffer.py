@@ -96,7 +96,7 @@ class HindsightExperienceReplayWrapper(object):
         if getattr(self.env, "norm", False):
             self.original_obs.append((extra_data.pop("original_obs", None), extra_data.pop("original_obs_new", None)))
         # Update current episode buffer
-        self.episode_transitions.append((obs_t, action, reward, obs_tp1, done if bootstrap is None else not bootstrap, *extra_data.values()))
+        self.episode_transitions.append((obs_t, action, reward, obs_tp1, done, bootstrap, *extra_data.values()))
         if self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
             # Store information about typical change in achieved goal (should consider if desired goal also changes)
             pass

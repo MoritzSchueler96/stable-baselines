@@ -66,7 +66,8 @@ class TD3(OffPolicyRLModel):
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, time_aware=False,
                  recurrent_scan_length=0, expert=None, expert_scale=0, expert_q_filter=None,
                  expert_filtering_starts=0, pretrain_expert=False, expert_value_path=None, clip_q_target=None,
-                 q_filter_scale_noise=False, reward_transformation=None, initialize_from_expert=False, exploration="agent"):
+                 q_filter_scale_noise=False, reward_transformation=None, initialize_from_expert=False,
+                 exploration="agent", n_step_returns=1):
 
         super(TD3, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=TD3Policy, requires_vec_env=False, policy_kwargs=policy_kwargs)
@@ -110,6 +111,8 @@ class TD3(OffPolicyRLModel):
         
         self.reward_transformation = reward_transformation
 
+        self.n_step_returns = n_step_returns
+
         self.graph = None
         self.replay_buffer = None
         self.episode_reward = None
@@ -140,6 +143,7 @@ class TD3(OffPolicyRLModel):
         self.policy_out = None
         self.policy_train_op = None
         self.policy_loss = None
+        self.gamma_ph = None
 
         self.recurrent_policy = getattr(self.policy, "recurrent", False)
         if self.recurrent_policy:
@@ -285,7 +289,7 @@ class TD3(OffPolicyRLModel):
                         qf1, qf2 = self.policy_tf.make_critics(self.processed_obs_ph, self.actions_ph)
                         # Q value when following the current policy
                         qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph,
-                                                                policy_out, reuse=True)
+                                                                policy_out, reuse=True) 
                 
                 if self.expert_value_path is not None:
                     _, expert_params = self._load_from_file(self.expert_value_path)
@@ -359,11 +363,16 @@ class TD3(OffPolicyRLModel):
                     # Take the min of the two target Q-Values (clipped Double-Q Learning)
                     min_qf_target = tf.minimum(qf1_target, qf2_target)
 
-                    # Targets for Q value regression
-                    q_backup = tf.stop_gradient(
-                        self.rewards_ph +
-                        (1 - self.terminals_ph) * self.gamma * min_qf_target
-                    )
+                    if self.n_step_returns == 1:
+                        # Targets for Q value regression
+                        q_backup = tf.stop_gradient(
+                            self.rewards_ph + (1 - self.terminals_ph) * self.gamma * min_qf_target
+                        )
+                    else:
+                        self.gamma_ph = tf.placeholder(tf.float32, shape=(None, 1), name='gamma_ph')
+                        q_backup = tf.stop_gradient(
+                            self.rewards_ph + (1 - self.terminals_ph) * tf.pow(self.gamma, self.gamma_ph) * min_qf_target
+                        )
 
                     if self.clip_q_target is not None:
                         q_backup = tf.clip_by_value(q_backup, self.clip_q_target[0], self.clip_q_target[1], name="q_backup_clipped")
@@ -494,11 +503,18 @@ class TD3(OffPolicyRLModel):
             batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, batch_goals, batch_hist_o, batch_hist_a, batch_mys \
                 = batch
         elif self.expert is not None and not self.pretrain_expert:
-            batch = self.replay_buffer.sample(self.batch_size)
-            batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, batch_expert_actions = batch
+            batch = self.replay_buffer.sample(self.batch_size, n_step=self.n_step_returns)
+            batch_data, batch_expert_actions = batch
+            if self.n_step_returns > 1:
+                batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, batch_bootstraps, batch_n_steps = batch_data
+            else:
+                batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, batch_bootstraps = batch_data
         else:
-            batch = self.replay_buffer.sample(self.batch_size)
-            batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
+            batch = self.replay_buffer.sample(self.batch_size, n_step=self.n_step_returns)
+            if self.n_step_returns > 1:
+                batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, batch_bootstraps, batch_n_steps = batch
+            else:
+                batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, batch_bootstraps = batch
             if self.buffer_is_prioritized:
                 batch_weights = np.ones(shape=(self.batch_size, 1))
 
@@ -507,7 +523,7 @@ class TD3(OffPolicyRLModel):
             self.actions_ph: batch_actions,
             self.next_observations_ph: batch_next_obs,
             self.rewards_ph: batch_rewards.reshape(self.batch_size, -1),
-            self.terminals_ph: batch_dones.reshape(self.batch_size, -1),
+            self.terminals_ph: ~batch_bootstraps.reshape(self.batch_size, -1),
             self.learning_rate_ph: learning_rate
         }
 
@@ -521,6 +537,9 @@ class TD3(OffPolicyRLModel):
                     if self.q_filter_scale_noise:
                         feed_dict[self.q_filter_activation_ph] = 1.0 - np.mean(self.q_filter_moving_average)
                     feed_dict[self.q_filtering_disabled_ph] = self.num_timesteps < self.expert_filtering_starts
+
+        if self.n_step_returns > 1:
+            feed_dict[self.gamma_ph] = batch_n_steps.reshape(self.batch_size, -1)
 
         if self.recurrent_policy:
             # TODO: does this lose important gradient contributions?
@@ -666,9 +685,9 @@ class TD3(OffPolicyRLModel):
                         action, self.pi_state = self.policy_tf_act.step(obs[None], state=self.pi_state, goal=d_goal[None], action_prev=action_prev[None], mask=np.array(done)[None])
                         action = action.flatten()
                     else:
-                        if self.pretrain_expert:
+                        if self.pretrain_expert or self.exploration == "expert":
                             action = expert_action
-                        elif self.exploration in ["expert", "q-filter"]:
+                        elif self.exploration == "q-filter":
                             agent_score, expert_score = self.sess.run([self.qf1_pi, self.qf1_expert], {self.observations_ph: obs[None], self.expert_actions_ph: action[None]})
                             if agent_score >= expert_score:
                                 action = self.policy_tf.step(obs[None]).flatten()
@@ -716,14 +735,10 @@ class TD3(OffPolicyRLModel):
                     else:
                         extra_data["expert_action"] = expert_action
                 if self.time_aware:
+                    bootstrap = True
                     if done:
                         bootstrap = info.get("termination", None) == "steps" or info.get("TimeLimit.truncated", False)
-                    else:
-                        bootstrap = not done
-                    if isinstance(self.replay_buffer, HindsightExperienceReplayWrapper):
-                        extra_data["bootstrap"] = bootstrap
-                    else:
-                        done = bootstrap
+                    extra_data["bootstrap"] = bootstrap
                 self.replay_buffer.add(obs, action, reward, new_obs, done, **extra_data)
                 obs = new_obs
 

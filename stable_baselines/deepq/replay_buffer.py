@@ -18,6 +18,8 @@ class ReplayBuffer(object):
         self._storage = []
         self._maxsize = int(size)
         self._next_idx = 0
+        self._ep_idx = 0
+        self._episode_indices = []
 
     def __len__(self):
         return len(self._storage)
@@ -50,7 +52,7 @@ class ReplayBuffer(object):
         """
         return len(self) == self.buffer_size
 
-    def add(self, obs_t, action, reward, obs_tp1, done):
+    def add(self, obs_t, action, reward, obs_tp1, done, bootstrap=None):
         """
         add a new transition to the buffer
 
@@ -60,31 +62,58 @@ class ReplayBuffer(object):
         :param obs_tp1: (Any) the current observation
         :param done: (bool) is the episode done
         """
-        data = (obs_t, action, reward, obs_tp1, done)
+        if bootstrap is None:
+            bootstrap = not done
+
+        data = (obs_t, action, reward, obs_tp1, done, bootstrap)
 
         if self._next_idx >= len(self._storage):
             self._storage.append(data)
+            self._episode_indices.append(self._ep_idx)
         else:
             self._storage[self._next_idx] = data
+            self._episode_indices[self._next_idx] = self._ep_idx
         self._next_idx = (self._next_idx + 1) % self._maxsize
 
-    def _encode_sample(self, idxes):
-        obses_t, actions, rewards, obses_tp1, dones = [], [], [], [], []
+        if done:
+            self._ep_idx += 1
+
+    def _encode_sample(self, idxes, n_step=1):
+        obses_t, actions, rewards, obses_tp1, dones, bootstraps = [], [], [], [], [], []
+        if n_step > 1:
+            return_steps = []
         for i in idxes:
             data = self._storage[i]
-            obs_t, action, reward, obs_tp1, done = data
+            obs_t, action, reward, obs_tp1, done, bootstrap = data
+            if n_step > 1:
+                steps_taken = 1
+                next_index = (i + steps_taken) % self._maxsize
+                while steps_taken < n_step and next_index < len(self) and self._episode_indices[i] == self._episode_indices[next_index]:
+                    reward += self._storage[next_index][2]
+                    steps_taken += 1
+                    next_index = (i + steps_taken) % self._maxsize
+                end_index = (i + steps_taken - 1) % self._maxsize  # last step did not meet requirements
+                obs_tp1 = self._storage[end_index][3]
+                done = self._storage[end_index][4]
+                return_steps.append(steps_taken)
             obses_t.append(np.array(obs_t, copy=False))
             actions.append(np.array(action, copy=False))
             rewards.append(reward)
             obses_tp1.append(np.array(obs_tp1, copy=False))
             dones.append(done)
-        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones)
+            bootstraps.append(bootstrap)
 
-    def sample(self, batch_size, **_kwargs):
+        if n_step > 1:
+            return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), np.array(bootstraps), np.array(return_steps)
+        else:
+            return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), np.array(bootstraps)
+
+    def sample(self, batch_size, n_step=1, **_kwargs):
         """
         Sample a batch of experiences.
 
         :param batch_size: (int) How many transitions to sample.
+        :param n_step: (int) get samples with up to n_step returns
         :return:
             - obs_batch: (np.ndarray) batch of observations
             - act_batch: (numpy float) batch of actions executed given obs_batch
@@ -94,7 +123,7 @@ class ReplayBuffer(object):
                 and 0 otherwise.
         """
         idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]
-        return self._encode_sample(idxes)
+        return self._encode_sample(idxes, n_step)
 
 
 class ExpertReplayBuffer(ReplayBuffer):
@@ -108,8 +137,9 @@ class ExpertReplayBuffer(ReplayBuffer):
             memories are dropped.
         """
         super(ExpertReplayBuffer, self).__init__(size)
+        self._expert_actions = []
         
-    def add(self, obs_t, action, reward, obs_tp1, done, expert_action):
+    def add(self, obs_t, action, reward, obs_tp1, done, bootstrap, expert_action):
         """
         add a new transition to the buffer
 
@@ -119,26 +149,23 @@ class ExpertReplayBuffer(ReplayBuffer):
         :param obs_tp1: (Any) the current observation
         :param done: (bool) is the episode done
         """
-        data = (obs_t, action, reward, obs_tp1, done, expert_action)
+        data = (obs_t, action, reward, obs_tp1, done, bootstrap)
 
         if self._next_idx >= len(self._storage):
             self._storage.append(data)
+            self._expert_actions.append(expert_action)
         else:
             self._storage[self._next_idx] = data
+            self._expert_actions[self._next_idx] = expert_action
         self._next_idx = (self._next_idx + 1) % self._maxsize
 
-    def _encode_sample(self, idxes):
-        obses_t, actions, rewards, obses_tp1, dones, expert_actions = [], [], [], [], [], []
+    def _encode_sample(self, idxes, n_step=1):
+        samples = super()._encode_sample(idxes, n_step)
+        expert_actions = []
         for i in idxes:
-            data = self._storage[i]
-            obs_t, action, reward, obs_tp1, done, expert_action = data
-            obses_t.append(np.array(obs_t, copy=False))
-            actions.append(np.array(action, copy=False))
-            rewards.append(reward)
-            obses_tp1.append(np.array(obs_tp1, copy=False))
-            dones.append(done)
-            expert_actions.append(expert_action)
-        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), np.array(expert_actions)
+            expert_actions.append(np.array(self._expert_actions[i], copy=False))
+        return samples, expert_actions
+
 
 # TODO: add for dynamics randomization which also takes in my, and support for HER?
 class RecurrentReplayBuffer(ReplayBuffer):
