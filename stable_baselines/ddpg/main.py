@@ -33,7 +33,7 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
         logger.set_level(logger.DISABLED)
 
     # Create envs.
-    env = gym.make(env_id)
+    env = FixedWingAircraft("../../../rl-uav/configs/env_config_ddpg.json")#gym.make(env_id)
     env = bench.Monitor(env, logger.get_dir() and os.path.join(logger.get_dir(), str(rank)))
 
     if evaluation and rank == 0:
@@ -132,6 +132,12 @@ def parse_args():
 
 
 if __name__ == '__main__':
+    import sys
+    sys.path.append("/home/eivind/Documents/dev/fixed-wing-gym")
+    sys.path.append("/home/eivind/Documents/dev/pyfly")
+    print(sys.path)
+    from gym_fixed_wing.fixed_wing import FixedWingAircraft
+
     args = parse_args()
     if MPI.COMM_WORLD.Get_rank() == 0:
         logger.configure()
