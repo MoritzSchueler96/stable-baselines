@@ -288,7 +288,8 @@ class RecurrentPolicy(TD3Policy):
             head = tf.concat([ff_branch, lstm_branch], axis=-1)
             head = mlp(head, [128, 128], self.activ_fn, self.layer_norm)
 
-            self.policy = policy = tf.layers.dense(head, self.ac_space.shape[0], activation=tf.tanh)
+            self.policy_pre_activation = tf.layers.dense(head, self.ac_space.shape[0])
+            self.policy = policy = tf.tanh(self.policy_pre_activation)
 
         return policy
 
