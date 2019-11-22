@@ -6,7 +6,7 @@ import numpy as np
 import tensorflow as tf
 
 from stable_baselines import logger
-from stable_baselines.her import HindsightExperienceReplayWrapper
+from stable_baselines.her import HindsightExperienceReplayWrapper, HERGoalEnvWrapper
 from stable_baselines.common import tf_util, OffPolicyRLModel, SetVerbosity, TensorboardWriter
 from stable_baselines.common.vec_env import VecEnv
 from stable_baselines.common.math_util import safe_mean, unscale_action, scale_action
@@ -550,9 +550,9 @@ class TD3(OffPolicyRLModel):
                     new_obs = np.concatenate([new_obs["observation"], new_obs["achieved_goal"]])
                     if done:
                         #term_steps = info.get("termination", None) == "steps" or info.get("TimeLimit.truncated", False)
-                        self.replay_buffer.add(obs, action, reward, new_obs, done, d_goal, self._get_env_parameters())
+                        self.replay_buffer.add(obs, action, reward, new_obs, done, goal=d_goal, my=self._get_env_parameters())
                     else:
-                        self.replay_buffer.add(obs, action, reward, new_obs, done, d_goal)
+                        self.replay_buffer.add(obs, action, reward, new_obs, done, goal=d_goal)
                     obs = new_obs
                 else:
                     if done:
@@ -722,8 +722,7 @@ class TD3(OffPolicyRLModel):
         return env
 
     def _get_env_parameters(self):
-        return []
-        if issubclass(self.replay_buffer, HindsightExperienceReplayWrapper):
+        if isinstance(self.env, HERGoalEnvWrapper):
             return self.env.env.get_simulator_parameters()
         else:
             return self.env.get_simulator_parameters()
