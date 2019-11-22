@@ -280,10 +280,7 @@ class TD3(OffPolicyRLModel):
                         qf1_target, qf2_target = self.target_policy_tf.make_critics(self.processed_next_obs_ph,
                                                                                     noisy_target_action)
 
-                if self.pretrain_expert is not None:
-                    policy_pre_activation = policy_out
-                else:
-                    policy_pre_activation = self.policy_tf.policy_pre_activation
+                policy_pre_activation = self.policy_tf.policy_pre_activation
 
                 # TODO: introduce somwehere here the placeholder for history which updates internal state?
                 with tf.variable_scope("loss", reuse=False):
