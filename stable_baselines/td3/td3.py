@@ -535,6 +535,9 @@ class TD3(OffPolicyRLModel):
             self.learning_rate_ph: learning_rate
         }
 
+        if self.n_step_returns > 1:
+            feed_dict[self.gamma_ph] = batch_n_steps.reshape(self.batch_size, -1)
+
         if self.expert is not None:
             if self.pretrain_expert:
                 feed_dict[self.expert_actions_ph] = batch_actions
@@ -545,9 +548,6 @@ class TD3(OffPolicyRLModel):
                     if self.q_filter_scale_noise:
                         feed_dict[self.q_filter_activation_ph] = 1.0 - np.mean(self.q_filter_moving_average)
                     feed_dict[self.q_filtering_disabled_ph] = self.num_timesteps < self.expert_filtering_starts
-
-        if self.n_step_returns > 1:
-            feed_dict[self.gamma_ph] = batch_n_steps.reshape(self.batch_size, -1)
 
         if self.recurrent_policy:
             # TODO: does this lose important gradient contributions?
