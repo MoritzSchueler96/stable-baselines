@@ -805,3 +805,42 @@ class TD3(OffPolicyRLModel):
         params_to_save = self.get_parameters()
 
         self._save_to_file(save_path, data=data, params=params_to_save)
+
+    def q_val_action_viz(self, obses, actions, q_func=None):
+        import matplotlib.pyplot as plt
+        import math
+        def find_nearest(array, value):
+            array = np.asarray(array)
+            idx = (np.abs(array-value)).argmin()
+            return array[idx]
+        if q_func is None:
+            q_func = self.qf1_pi
+        x = np.linspace(-1, 1, 20)
+        if len(obses.shape) == 1:
+            obses = obses.reshape(1, -1)
+        if len(actions.shape) == 1:
+            actions = actions.reshape(1, -1)
+
+        data = [{k: [] for k in x} for i in range(actions.shape[1])]
+        action_ph = self.expert_actions_ph if q_func == self.qf1_expert else self.actions_ph
+
+        for obs_i in range(obses.shape[0]):
+            for action_i in range(actions.shape[1]):
+                for x_i in x:
+                    action_mod = np.zeros(shape=(actions.shape[1],))
+                    action_mod[action_i] = x_i
+                    action_new = actions[obs_i, action_i] + action_mod
+                    if np.abs(actions[obs_i, action_i] + x_i) > 1:
+                        continue
+                    q_val = self.sess.run(q_func, {self.observations_ph: obses[obs_i, :].reshape(1, -1),
+                                                   action_ph: action_new.reshape(1, -1)})[0][0]
+                    data[action_i][find_nearest(x, actions[obs_i, action_i] + x_i)].append(q_val)
+
+        fig, axs = plt.subplots(actions.shape[1] // 2, math.ceil(actions.shape[1] / 2))
+        for action_i in range(actions.shape[1]):
+            ax_r, ax_c = action_i // (actions.shape[1] // 2), action_i % (actions.shape[1] // 2)
+            axs[ax_r, ax_c].plot(x, [np.mean(data[action_i][x_i]) for x_i in x])
+            axs[ax_r, ax_c].set_xlabel("Action deviation")
+            axs[ax_r, ax_c].set_ylabel("Q-value")
+            axs[ax_r, ax_c].set_title("Action {}".format(action_i))
+        plt.show()
