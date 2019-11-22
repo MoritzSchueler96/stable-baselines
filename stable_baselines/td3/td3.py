@@ -66,8 +66,8 @@ class TD3(OffPolicyRLModel):
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, time_aware=False,
                  recurrent_scan_length=0, expert=None, expert_scale=0, expert_q_filter=None,
                  expert_filtering_starts=0, pretrain_expert=False, expert_value_path=None, clip_q_target=None,
-                 q_filter_scale_noise=False, reward_transformation=None, initialize_from_expert=False,
-                 exploration="agent", n_step_returns=1):
+                 q_filter_scale_noise=False, reward_transformation=None,
+                 initialize_value_path=None, exploration="agent", n_step_returns=1):
 
         super(TD3, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=TD3Policy, requires_vec_env=False, policy_kwargs=policy_kwargs)
@@ -102,8 +102,7 @@ class TD3(OffPolicyRLModel):
         self.expert_scale_ph = None
         assert expert_q_filter in [None, "expert", "own"]
         self.expert_q_filter = expert_q_filter
-        self.initialize_from_expert = initialize_from_expert
-        assert not initialize_from_expert or expert_value_path is not None
+        self.initialize_value_path = initialize_value_path
         self.exploration = exploration
 
         self.clip_q_target = clip_q_target
@@ -440,11 +439,20 @@ class TD3(OffPolicyRLModel):
                         tf.assign(target, (1 - self.tau) * target + self.tau * source)
                         for target, source in zip(target_params, source_params)
                     ]
-                    if self.initialize_from_expert:
-                        source_init_op = [
-                            tf.assign(target, source)
-                            for target, source in zip(qvalues_params, expert_params)
-                        ]
+                    if self.initialize_value_path is not None:
+                        if self.initialize_value_path == "expert":
+                            source_init_op = [
+                                tf.assign(target, source)
+                                for target, source in zip(qvalues_params, expert_params)
+                            ]
+                        else:
+                            _, init_params = self._load_from_file(
+                                "/home/eivind/Documents/dev/gym-workshop/gym_models/td3_fetchpap_pretrainMC_noise/checkpoint_model_142001.pkl")
+                            init_params = [val for key, val in init_params.items() if "model/values_fn" in key]
+                            source_init_op = [
+                                tf.assign(target, source)
+                                for target, source in zip(qvalues_params, init_params)
+                            ]
                     # Initializing target to match source variables
                     target_init_op = [
                         tf.assign(target, source)
@@ -482,7 +490,7 @@ class TD3(OffPolicyRLModel):
                 # Initialize Variables and target network
                 with self.sess.as_default():
                     self.sess.run(tf.global_variables_initializer())
-                    if self.initialize_from_expert:
+                    if self.initialize_value_path is not None:
                         self.sess.run(source_init_op)
                     if self.expert_value_path is not None and self.expert_q_filter == "expert":
                         self.sess.run(expert_init_op)
