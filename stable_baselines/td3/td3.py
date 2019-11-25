@@ -127,7 +127,6 @@ class TD3(OffPolicyRLModel):
         if self.recurrent_policy:
             self.policy_tf_act = None
             self.policy_act = None
-            self.buffer_type = DRRecurrentReplayBuffer
             self.goal_ph = None
             self.action_prev_ph = None
             self.my_ph = None
@@ -171,8 +170,11 @@ class TD3(OffPolicyRLModel):
                                 buffer_kw.update({"learning_starts": self.prioritization_starts, "batch_size": self.batch_size})
                             self.replay_buffer = self.buffer_type(**buffer_kw)
                     else:
-                        self.replay_buffer = self.buffer_type(self.buffer_size, episode_max_len=300,
-                                                              scan_length=self.recurrent_scan_length)
+                        replay_buffer_kw = {"size": self.buffer_size}
+                        if self.recurrent_policy:
+                            replay_buffer_kw["scan_length"] = self.recurrent_scan_length
+                            replay_buffer_kw["episode_max_len"] = 300
+                        self.replay_buffer = self.buffer_type(**replay_buffer_kw)
 
                 #self.replay_buffer = DiscrepancyReplayBuffer(self.buffer_size, scorer=self.policy_tf.get_q_discrepancy)
 
