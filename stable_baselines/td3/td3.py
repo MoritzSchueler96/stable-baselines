@@ -387,7 +387,7 @@ class TD3(OffPolicyRLModel):
 
                 self.summary = tf.summary.merge_all()
 
-    def _train_step(self, step, writer, learning_rate, update_policy):
+    def _train_step(self, step, writer, learning_rate, update_policy, viz=False):
         # Sample a batch from the replay buffer
         sample_kw = {}
         if self.buffer_is_prioritized and self.num_timesteps >= self.prioritization_starts:
@@ -422,6 +422,8 @@ class TD3(OffPolicyRLModel):
 
         feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items()})
 
+        if viz:
+            self.q_val_action_viz(batch_obs, batch_actions, vis_dim="2d")
         step_ops = self.step_ops
         if update_policy:
             # Update policy and target networks
@@ -578,7 +580,8 @@ class TD3(OffPolicyRLModel):
                         # this is controlled by the `policy_delay` parameter
                         step_writer = writer if grad_step % self.write_freq == 0 else None
                         mb_infos_vals.append(
-                            self._train_step(step, step_writer, current_lr, (step + grad_step) % self.policy_delay == 0))
+                            self._train_step(step, step_writer, current_lr, (step + grad_step) % self.policy_delay == 0
+                        ,grad_step == 0))
 
                     # Log losses and entropy, useful for monitor training
                     if len(mb_infos_vals) > 0:
@@ -808,41 +811,78 @@ class TD3(OffPolicyRLModel):
 
         self._save_to_file(save_path, data=data, params=params_to_save)
 
-    def q_val_action_viz(self, obses, actions, q_func=None):
+    def q_val_action_viz(self, obses, actions, q_func=None, vis_dim="1d"):
         import matplotlib.pyplot as plt
         import math
+
         def find_nearest(array, value):
             array = np.asarray(array)
             idx = (np.abs(array-value)).argmin()
             return array[idx]
+
+        def find_nearest2d(array, value):
+            array = np.asarray(array)
+            idx = (np.linalg.norm(array-value, axis=1)).argmin()
+            return idx
+
         if q_func is None:
-            q_func = self.qf1_pi
-        x = np.linspace(-1, 1, 20)
-        if len(obses.shape) == 1:
-            obses = obses.reshape(1, -1)
-        if len(actions.shape) == 1:
-            actions = actions.reshape(1, -1)
-
-        data = [{k: [] for k in x} for i in range(actions.shape[1])]
+            q_func = self.qf1
         action_ph = self.expert_actions_ph if q_func == self.qf1_expert else self.actions_ph
+        if vis_dim == "1d":
+            x = np.linspace(-1, 1, 20)
+            if len(obses.shape) == 1:
+                obses = obses.reshape(1, -1)
+            if len(actions.shape) == 1:
+                actions = actions.reshape(1, -1)
 
-        for obs_i in range(obses.shape[0]):
+            data = [{k: [] for k in x} for i in range(actions.shape[1])]
+
+            for obs_i in range(obses.shape[0]):
+                for action_i in range(actions.shape[1]):
+                    for x_i in x:
+                        action_mod = np.zeros(shape=(actions.shape[1],))
+                        action_mod[action_i] = x_i
+                        action_new = actions[obs_i, action_i] + action_mod
+                        if np.abs(actions[obs_i, action_i] + x_i) > 1:
+                            continue
+                        q_val = self.sess.run(q_func, {self.observations_ph: obses[obs_i, :].reshape(1, -1),
+                                                       action_ph: action_new.reshape(1, -1)})[0][0]
+                        data[action_i][find_nearest(x, actions[obs_i, action_i] + x_i)].append(q_val)
+
+            num_rows = int(actions.shape[1] // np.sqrt(actions.shape[1]))
+            num_cols = math.ceil(actions.shape[1] / 2) if num_rows > 1 else actions.shape[1]
+            fig, axs = plt.subplots(num_rows, num_cols)
+            axs = axs.reshape(-1)
             for action_i in range(actions.shape[1]):
-                for x_i in x:
-                    action_mod = np.zeros(shape=(actions.shape[1],))
-                    action_mod[action_i] = x_i
-                    action_new = actions[obs_i, action_i] + action_mod
-                    if np.abs(actions[obs_i, action_i] + x_i) > 1:
-                        continue
-                    q_val = self.sess.run(q_func, {self.observations_ph: obses[obs_i, :].reshape(1, -1),
-                                                   action_ph: action_new.reshape(1, -1)})[0][0]
-                    data[action_i][find_nearest(x, actions[obs_i, action_i] + x_i)].append(q_val)
+                axs[action_i].plot(x, [np.mean(data[action_i][x_i]) for x_i in x])
+                axs[action_i].set_xlabel("Action deviation")
+                axs[action_i].set_ylabel("Q-value")
+                axs[action_i].set_title("Action {}".format(action_i))
+        elif vis_dim == "2d":
+            from mpl_toolkits.mplot3d import Axes3D
+            xs, ys = np.mgrid[-2:2:21j, -2:2:21j]
+            points = np.dstack([np.ravel(xs), np.ravel(ys)]).reshape(-1, 2)
+            data = [[] for i in range(points.shape[0])]
+            for obs_i in range(obses.shape[0]):
+                action_x, action_y = actions[obs_i, 0] + xs, actions[obs_i, 1] + ys
+                actions_i = np.dstack([np.ravel(action_x), np.ravel(action_y)]).reshape(-1, 2)
+                valid_actions_idxs = np.where((np.abs(actions_i) <= 1).all(axis=1))[0]
+                valid_actions = actions_i[valid_actions_idxs]
+                q_vals = self.sess.run(q_func, {self.observations_ph: np.repeat(obses[obs_i, :].reshape(1, -1), valid_actions_idxs.shape[0], axis=0), action_ph: valid_actions})
+                #for va_i, valid_action in enumerate(d_actions):
+                #    data[find_nearest2d(points, valid_action)].append(q_vals[va_i])
+                for va_i, idx in enumerate(valid_actions_idxs):
+                    data[idx].append(q_vals[va_i])
 
-        fig, axs = plt.subplots(actions.shape[1] // 2, math.ceil(actions.shape[1] / 2))
-        for action_i in range(actions.shape[1]):
-            ax_r, ax_c = action_i // (actions.shape[1] // 2), action_i % (actions.shape[1] // 2)
-            axs[ax_r, ax_c].plot(x, [np.mean(data[action_i][x_i]) for x_i in x])
-            axs[ax_r, ax_c].set_xlabel("Action deviation")
-            axs[ax_r, ax_c].set_ylabel("Q-value")
-            axs[ax_r, ax_c].set_title("Action {}".format(action_i))
-        plt.show()
+            fig = plt.figure()
+            ax = fig.add_subplot(111, projection="3d")
+            z = np.array([np.mean(data[i]) for i in range(len(data))])
+            ax.plot_surface(xs, ys, z.reshape(xs.shape))
+            ax.set_xlabel("Action 0 deviation")
+            ax.set_ylabel("Action 1 devation")
+            ax.set_zlabel("Q-value")
+            #plt.scatter([0.], [0.], z[find_nearest2d(points, [0, 0])] + 1, marker="x")
+            plt.plot([0, 0], [0, 0], [np.nanmin(z) - 1, np.nanmax(z) + 1], linewidth=3)
+
+        #plt.show()
+        plt.savefig("/home/eivind/Documents/dev/gym-workshop/gym_models/td3_reacher_expert_TRAININGSHAPETEST/q_viz_{}.png".format(self.num_timesteps), format="png", bbox_inches="tight")
