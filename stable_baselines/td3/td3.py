@@ -352,6 +352,12 @@ class TD3(OffPolicyRLModel):
                         qf1_target, qf2_target = self.target_policy_tf.make_critics(self.processed_next_obs_ph,
                                                                                     noisy_target_action)
 
+                self.qf1, self.qf2 = qf1, qf2
+                try:
+                    self.qf1_pi, self.qf2_pi, self.qf1_expert, self.qf2_expert = qf1_pi, qf2_pi, qf1_expert, qf2_expert
+                except:
+                    pass
+
                 if self.pretrain_expert is not None:
                     policy_pre_activation = policy_out
                 else:
