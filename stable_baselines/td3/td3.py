@@ -532,14 +532,12 @@ class TD3(OffPolicyRLModel):
                     if done:
                         extra_data["my"] = self._get_env_parameters()
                 if self.time_aware:
+                    bootstrap = True
+                    info_time_limit = info.get("TimeLimit.truncated", None)
                     if done:
-                        bootstrap = info.get("termination", None) == "steps" or info.get("TimeLimit.truncated", False)
-                    else:
-                        bootstrap = not done
-                    if isinstance(self.replay_buffer, HindsightExperienceReplayWrapper):
-                        extra_data["bootstrap"] = bootstrap
-                    else:
-                        done = bootstrap
+                        bootstrap = info.get("termination", None) == "steps" or \
+                                    (info_time_limit is not None and info_time_limit)
+                    extra_data["bootstrap"] = bootstrap
                 self.replay_buffer.add(obs, action, reward, new_obs, done, **extra_data)
                 obs = new_obs
 
