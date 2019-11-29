@@ -72,7 +72,7 @@ class HindsightExperienceReplayWrapper(object):
             #self.legal_goal_low, self.legal_goal_high = self.env.env.get_goal_limits()
         self.replay_buffer = replay_buffer
 
-        if replay_buffer.__name__ == "DRRecurrentReplayBuffer":
+        if "Recurrent" in replay_buffer.__name__:
             self.recurrent = True
         else:
             self.recurrent = False
@@ -194,66 +194,93 @@ class HindsightExperienceReplayWrapper(object):
                 self.stable_indices = self.stable_indices[np.all((achieved_goals[self.stable_indices] - achieved_goals[0]) >= np.array([0.05, 0.05, 0]))]
                 #self.stable_indices = self.stable_indices[np.all(achieved_goals[self.stable_indices] >= self.legal_goal_low, axis=1) & np.all(achieved_goals[self.stable_indices] <= self.legal_goal_high, axis=1)]
 
-        for transition_idx, transition in enumerate(self.episode_transitions):
-
-            if self.recurrent:
-                obs_t, action, reward, obs_tp1, done, goal, my = transition
-                self.replay_buffer.add(obs_t, action, reward, obs_tp1, done, goal, my)
-            else:
-                obs_t, action, reward, obs_tp1, done = transition
-                # Add to the replay buffer
-                if self.replay_buffer.__name__ == "StableReplayBuffer":
-                    self.replay_buffer.add(obs_t, action, reward, obs_tp1, done, tot_achieved_goal_changes)
-                else:
-                    self.replay_buffer.add(obs_t, action, reward, obs_tp1, done)
-
-            if self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE and (self.stable_indices.shape[0] == 0 or transition_idx >= self.stable_indices[-1]):
-                continue
-
-            # We cannot sample a goal from the future in the last step of an episode
-            if transition_idx == len(self.episode_transitions) - 1 and self.goal_selection_strategy == GoalSelectionStrategy.FUTURE:
-                break
-            elif transition_idx >= len(self.episode_transitions) - 2 and self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
-                continue
-
-            # Sampled n goals per transition, where n is `n_sampled_goal`
-            # this is called k in the paper
-            sampled_goals = self._sample_achieved_goals(self.episode_transitions, transition_idx)
-            # For each sampled goals, store a new transition
+        if self.replay_buffer.__name__ == "EpisodicRecurrentReplayBuffer":
+            for transition in self.episode_transitions:
+                self.replay_buffer.add(*transition)
+            sampled_goals = self._sample_achieved_goals(self.episode_transitions, 0)
             for goal in sampled_goals:
-                # Copy transition to avoid modifying the original one
+                for transition_idx, transition in enumerate(self.episode_transitions):
+                    obs, action, reward, next_obs, done, old_goal, my = copy.deepcopy(transition)
+                    # Convert concatenated obs to dict, so we can update the goals
+                    obs_dict, next_obs_dict = map(self.env.convert_obs_to_dict, (obs, next_obs))
+                    # Update the desired goal in the transition
+                    obs_dict['desired_goal'] = goal
+                    next_obs_dict['desired_goal'] = goal
+
+                    # Update the reward according to the new desired goal
+                    prev_state = obs_dict["achieved_goal"]
+                    achieved_goal = next_obs_dict['achieved_goal']
+                    desired_goal = goal
+                    if self.env.multi_dimensional_obs:
+                        prev_state = prev_state[0]
+                        achieved_goal = achieved_goal[0]
+                        desired_goal = goal[0]
+                    info = {"step": transition_idx, "prev_state": prev_state, "action": action}
+                    reward = self.env.compute_reward(achieved_goal, desired_goal, info)
+                    # Can we use achieved_goal == desired_goal
+
+                    self.replay_buffer.add(obs, action, reward, next_obs, done, goal, my)
+
+        else:
+            for transition_idx, transition in enumerate(self.episode_transitions):
                 if self.recurrent:
-                    obs, action, reward, next_obs, done, _, _ = copy.deepcopy(transition)
+                    obs_t, action, reward, obs_tp1, done, goal, my = transition
+                    self.replay_buffer.add(obs_t, action, reward, obs_tp1, done, goal, my)
                 else:
-                    obs, action, reward, next_obs, done = copy.deepcopy(transition)
+                    obs_t, action, reward, obs_tp1, done = transition
+                    # Add to the replay buffer
+                    if self.replay_buffer.__name__ == "StableReplayBuffer":
+                        self.replay_buffer.add(obs_t, action, reward, obs_tp1, done, tot_achieved_goal_changes)
+                    else:
+                        self.replay_buffer.add(obs_t, action, reward, obs_tp1, done)
 
-                # Convert concatenated obs to dict, so we can update the goals
-                obs_dict, next_obs_dict = map(self.env.convert_obs_to_dict, (obs, next_obs))
+                if self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE and (self.stable_indices.shape[0] == 0 or transition_idx >= self.stable_indices[-1]):
+                    continue
 
-                # Update the desired goal in the transition
-                obs_dict['desired_goal'] = goal
-                next_obs_dict['desired_goal'] = goal
+                # We cannot sample a goal from the future in the last step of an episode
+                if transition_idx == len(self.episode_transitions) - 1 and self.goal_selection_strategy == GoalSelectionStrategy.FUTURE:
+                    break
+                elif transition_idx >= len(self.episode_transitions) - 2 and self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
+                    continue
 
-                # Update the reward according to the new desired goal
-                prev_state = obs_dict["achieved_goal"]
-                achieved_goal = next_obs_dict['achieved_goal']
-                desired_goal = goal
-                if self.env.multi_dimensional_obs:
-                    prev_state = prev_state[0]
-                    achieved_goal = achieved_goal[0]
-                    desired_goal = goal[0]
-                info = {"step": transition_idx, "prev_state": prev_state, "action": action}
-                reward = self.env.compute_reward(achieved_goal, desired_goal, info)
-                # Can we use achieved_goal == desired_goal?
-                done = False
+                # Sampled n goals per transition, where n is `n_sampled_goal`
+                # this is called k in the paper
+                sampled_goals = self._sample_achieved_goals(self.episode_transitions, transition_idx)
+                # For each sampled goals, store a new transition
+                for goal in sampled_goals:
+                    # Copy transition to avoid modifying the original one
+                    if self.recurrent:
+                        obs, action, reward, next_obs, done, _, _ = copy.deepcopy(transition)
+                    else:
+                        obs, action, reward, next_obs, done = copy.deepcopy(transition)
 
-                # Transform back to ndarrays
-                obs, next_obs = map(self.env.convert_dict_to_obs, (obs_dict, next_obs_dict))
+                    # Convert concatenated obs to dict, so we can update the goals
+                    obs_dict, next_obs_dict = map(self.env.convert_obs_to_dict, (obs, next_obs))
 
-                # Add artificial transition to the replay buffer
-                if self.replay_buffer.__name__ == "StableReplayBuffer":
-                    self.replay_buffer.add(obs, action, reward, next_obs, done, tot_achieved_goal_changes)
-                elif self.replay_buffer.__name__ == "DRRecurrentReplayBuffer":
-                    self.replay_buffer.add_her(goal, reward, transition_idx)
-                else:
-                    self.replay_buffer.add(obs, action, reward, next_obs, done)
+                    # Update the desired goal in the transition
+                    obs_dict['desired_goal'] = goal
+                    next_obs_dict['desired_goal'] = goal
+
+                    # Update the reward according to the new desired goal
+                    prev_state = obs_dict["achieved_goal"]
+                    achieved_goal = next_obs_dict['achieved_goal']
+                    desired_goal = goal
+                    if self.env.multi_dimensional_obs:
+                        prev_state = prev_state[0]
+                        achieved_goal = achieved_goal[0]
+                        desired_goal = goal[0]
+                    info = {"step": transition_idx, "prev_state": prev_state, "action": action}
+                    reward = self.env.compute_reward(achieved_goal, desired_goal, info)
+                    # Can we use achieved_goal == desired_goal?
+                    done = False
+
+                    # Transform back to ndarrays
+                    obs, next_obs = map(self.env.convert_dict_to_obs, (obs_dict, next_obs_dict))
+
+                    # Add artificial transition to the replay buffer
+                    if self.replay_buffer.__name__ == "StableReplayBuffer":
+                        self.replay_buffer.add(obs, action, reward, next_obs, done, tot_achieved_goal_changes)
+                    elif self.replay_buffer.__name__ == "DRRecurrentReplayBuffer":
+                        self.replay_buffer.add_her(goal, reward, transition_idx)
+                    else:
+                        self.replay_buffer.add(obs, action, reward, next_obs, done)

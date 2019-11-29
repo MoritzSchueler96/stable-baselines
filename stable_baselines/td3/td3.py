@@ -172,8 +172,9 @@ class TD3(OffPolicyRLModel):
                     else:
                         replay_buffer_kw = {"size": self.buffer_size}
                         if self.recurrent_policy:
-                            replay_buffer_kw["scan_length"] = self.recurrent_scan_length
-                            replay_buffer_kw["episode_max_len"] = 300
+                            if self.buffer_type.__name__ == "DRRecurrentReplayBuffer":
+                                replay_buffer_kw["scan_length"] = self.recurrent_scan_length
+                            replay_buffer_kw["episode_length"] = 300
                         self.replay_buffer = self.buffer_type(**replay_buffer_kw)
 
                 #self.replay_buffer = DiscrepancyReplayBuffer(self.buffer_size, scorer=self.policy_tf.get_q_discrepancy)
