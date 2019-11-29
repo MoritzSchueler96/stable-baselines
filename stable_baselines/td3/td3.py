@@ -752,8 +752,10 @@ class TD3(OffPolicyRLModel):
                         extra_data["expert_action"] = expert_action
                 if self.time_aware:
                     bootstrap = True
+                    info_time_limit = info.get("TimeLimit.truncated", None)
                     if done:
-                        bootstrap = info.get("termination", None) == "steps" or info.get("TimeLimit.truncated", False)
+                        bootstrap = info.get("termination", None) == "steps" or \
+                                    (info_time_limit is not None and info_time_limit)
                     extra_data["bootstrap"] = bootstrap
                 self.replay_buffer.add(obs, action, reward, new_obs, done, **extra_data)
                 obs = new_obs
