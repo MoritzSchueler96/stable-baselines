@@ -382,8 +382,13 @@ class TD3(OffPolicyRLModel):
                 batch_weights = np.expand_dims(batch_weights, axis=1)
         elif self.recurrent_policy:
             batch = self.replay_buffer.sample(self.batch_size)
-            batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, batch_goals, batch_hist_o, batch_hist_a, batch_mys \
-                = batch
+            if self.buffer_type.__name__ == "DRRecurrentReplayBuffer":
+                batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, batch_goals, batch_hist_o, batch_hist_a, batch_mys \
+                 = batch
+            else:
+                batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, batch_goals, batch_action_prevs, batch_resets, batch_mys = batch
+                batch_hist_a = batch_action_prevs
+                batch_hist_o = batch_obs
         else:
             batch = self.replay_buffer.sample(self.batch_size)
             batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
@@ -402,24 +407,22 @@ class TD3(OffPolicyRLModel):
         if self.recurrent_policy:
             # TODO: does this lose important gradient contributions?
             self.pi_states = None
-            rnn_state_reset = np.zeros(shape=(self.batch_size * (self.recurrent_scan_length + 1),), dtype=np.bool)
-            rnn_state_reset[::(self.recurrent_scan_length + 1)] = 1
+            if self.buffer_type.__name__ == "DRRecurrentReplayBuffer":
+                batch_resets = np.zeros(shape=(self.batch_size * (self.recurrent_scan_length + 1),), dtype=np.bool)
+                batch_resets[::(self.recurrent_scan_length + 1)] = 1
 
             feed_dict.update({
                 self.my_ph: batch_mys,
                 self.goal_ph: batch_goals,
                 self.obs_rnn_ph: batch_hist_o,
                 self.action_prev_ph: batch_hist_a,
-                self.dones_ph: rnn_state_reset,
-                self.policy_tf.pi_state_ph: self.policy_tf.initial_state,
-                self.policy_tf.qf1_state_ph: self.policy_tf.initial_state,
-                self.policy_tf.qf2_state_ph: self.policy_tf.initial_state,
-                self.target_policy_tf.pi_state_ph: self.policy_tf.initial_state,
-                self.target_policy_tf.qf1_state_ph: self.policy_tf.initial_state,
-                self.target_policy_tf.qf2_state_ph: self.policy_tf.initial_state,
-                #self.policy_tf.pi_state_ph: np.array([self.policy_tf.initial_state for i in range(self.batch_size)]),
-                #self.policy_tf.qf1_state_ph: np.array([self.policy_tf.initial_state for i in range(self.batch_size)]),
-                #self.policy_tf.qf2_state_ph: np.array([self.policy_tf.initial_state for i in range(self.batch_size)])
+                self.dones_ph: batch_resets,
+                self.pi_state_ph: self.policy_tf.pi_initial_state,
+                self.qf1_state_ph: self.policy_tf.qf1_initial_state,
+                self.qf2_state_ph: self.policy_tf.qf2_initial_state,
+                self.target_policy_tf.pi_state_ph: self.target_policy_tf.pi_initial_state,
+                self.target_policy_tf.qf1_state_ph: self.target_policy_tf.qf1_initial_state,
+                self.target_policy_tf.qf2_state_ph: self.target_policy_tf.qf2_initial_state,
             })
 
         if self.buffer_is_prioritized:
