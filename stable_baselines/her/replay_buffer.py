@@ -201,7 +201,7 @@ class HindsightExperienceReplayWrapper(object):
             sampled_goals = self._sample_achieved_goals(self.episode_transitions, 0)
             for goal in sampled_goals:
                 for transition_idx, transition in enumerate(self.episode_transitions):
-                    obs, action, reward, next_obs, done, old_goal, my = copy.deepcopy(transition)
+                    obs, action, reward, next_obs, done, *extra_data = copy.deepcopy(transition)
                     # Convert concatenated obs to dict, so we can update the goals
                     obs_dict, next_obs_dict = map(self.env.convert_obs_to_dict, (obs, next_obs))
                     # Update the desired goal in the transition
@@ -220,7 +220,12 @@ class HindsightExperienceReplayWrapper(object):
                     reward = self.env.compute_reward(achieved_goal, desired_goal, info)
                     # Can we use achieved_goal == desired_goal
 
-                    self.replay_buffer.add(obs, action, reward, next_obs, done, goal, my)
+                    if done:
+                        extra_data = {"my": extra_data[-1]}
+                    else:
+                        extra_data = {}
+
+                    self.replay_buffer.add(obs, action, reward, next_obs, done, goal, **extra_data)
         else:
             for transition_idx, transition in enumerate(self.episode_transitions):
                 obs_t, action, reward, obs_tp1, done, *extra_data = transition
@@ -245,10 +250,7 @@ class HindsightExperienceReplayWrapper(object):
                 # For each sampled goals, store a new transition
                 for goal in sampled_goals:
                     # Copy transition to avoid modifying the original one
-                    if self.recurrent:
-                        obs, action, reward, next_obs, done, _, _ = copy.deepcopy(transition)
-                    else:
-                        obs, action, reward, next_obs, done, *extra_data = copy.deepcopy(transition)
+                    obs, action, reward, next_obs, done, *extra_data = copy.deepcopy(transition)
 
                     # Convert concatenated obs to dict, so we can update the goals
                     obs_dict, next_obs_dict = map(self.env.convert_obs_to_dict, (obs, next_obs))
