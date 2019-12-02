@@ -133,6 +133,12 @@ def parse_args():
 
 
 if __name__ == '__main__':
+    import sys
+    sys.path.append("/home/eivind/Documents/dev/fixed-wing-gym")
+    sys.path.append("/home/eivind/Documents/dev/pyfly")
+    print(sys.path)
+    from gym_fixed_wing.fixed_wing import FixedWingAircraft
+
     args = parse_args()
     if MPI.COMM_WORLD.Get_rank() == 0:
         logger.configure()

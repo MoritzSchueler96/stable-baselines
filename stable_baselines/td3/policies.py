@@ -116,6 +116,7 @@ class FeedForwardPolicy(TD3Policy):
             layers = [64, 64]
         self.layers = layers
         self.obs_module_indices = obs_module_indices
+        self.policy_pre_activation = None
 
         assert len(layers) >= 1, "Error: must have at least one hidden layer for the policy."
 
@@ -135,7 +136,8 @@ class FeedForwardPolicy(TD3Policy):
 
             pi_h = mlp(pi_h, self.layers, self.activ_fn, layer_norm=self.layer_norm)
 
-            self.policy = policy = tf.layers.dense(pi_h, self.ac_space.shape[0], activation=tf.tanh)
+            self.policy_pre_activation = tf.layers.dense(pi_h, self.ac_space.shape[0])
+            self.policy = policy = tf.tanh(self.policy_pre_activation)
 
         return policy
 
@@ -202,7 +204,7 @@ class RecurrentPolicy(TD3Policy):
     recurrent = True
 
     def __init__(self, sess, ob_space, ac_space, goal_size, my_size, n_env=1, n_steps=1, n_batch=None, reuse=False, layers=None,
-                 cnn_extractor=nature_cnn, feature_extraction="mlp",
+                 cnn_extractor=nature_cnn, feature_extraction="mlp", n_lstm=128,
                  layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
         #ob_space  # Hack away goal from obs placeholder
         policy_ob_space = copy.deepcopy(ob_space)
@@ -221,19 +223,19 @@ class RecurrentPolicy(TD3Policy):
         self.cnn_vf = self.cnn_kwargs.pop("cnn_vf", True)
         self.reuse = reuse
         if layers is None:
-            layers = [64, 64]
+            layers = {"ff": [128], "lstm": [128], "head": [128, 128]}
         self.layers = layers
         self.obs_module_indices = obs_module_indices
 
         assert len(layers) >= 1, "Error: must have at least one hidden layer for the policy."
 
         self.activ_fn = act_fun
-        self.n_lstm = 128
+        self.n_lstm = n_lstm
 
         with tf.variable_scope("input", reuse=False):
             self.dones_ph = tf.placeholder(tf.float32, (None,), name="dones_ph")  # (done t-1)
             self.goal_ph = tf.placeholder(tf.float32, (None, goal_size), name="goal_ph")
-            self.action_prev_ph = tf.placeholder(tf.float32, (None, ac_space), name="action_prev_ph")
+            self.action_prev_ph = tf.placeholder(tf.float32, (None,) + ac_space.shape, name="action_prev_ph")
             self.pi_state_ph = tf.placeholder(tf.float32, (1, self.n_lstm * 2), name="pi_state_ph")
             self.qf1_state_ph = tf.placeholder(tf.float32, (1, self.n_lstm * 2), name="qf1_state_ph")
             self.qf2_state_ph = tf.placeholder(tf.float32, (1, self.n_lstm * 2), name="qf2_state_ph")
@@ -272,21 +274,29 @@ class RecurrentPolicy(TD3Policy):
             pi_h_lstm = tf.layers.flatten(obs_rnn)
 
             ff_branch = tf.concat([pi_h_ff, goal], axis=-1)
-            ff_branch = self.activ_fn(tf.layers.dense(ff_branch, 128, name="ff_fc0"))
-
             lstm_branch = tf.concat([pi_h_lstm, action_rnn], axis=-1)
-            lstm_branch = self.activ_fn(tf.layers.dense(lstm_branch, 128, name="rnn_fc0"))
+
+            for i, fc_layer_units in enumerate(self.layers["ff"]):
+                ff_branch = self.activ_fn(tf.layers.dense(ff_branch, fc_layer_units, name="ff_fc{}".format(i)))
+
+            for i, fc_layer_units in enumerate(self.layers["lstm"]):
+                lstm_branch = self.activ_fn(tf.layers.dense(lstm_branch, fc_layer_units, name="rnn_fc{}".format(i)))
+
             lstm_branch = batch_to_seq(lstm_branch, n_batch=self.n_batch, n_steps=self.n_steps)
             masks = batch_to_seq(dones, self.n_batch, self.n_steps)
             lstm_branch, self.pi_state = lstm(lstm_branch, masks, self.pi_state_ph, 'lstm_pi', n_hidden=self.n_lstm,
                                          layer_norm=self.layer_norm)
-            if self.n_steps > 1:  # TODO: just speculating here
+
+            if self.n_steps > 1:
                 lstm_branch = [lstm_branch[-1]]
             lstm_branch = seq_to_batch(lstm_branch)
             head = tf.concat([ff_branch, lstm_branch], axis=-1)
-            head = mlp(head, [128, 128], self.activ_fn, self.layer_norm)
 
-            self.policy = policy = tf.layers.dense(head, self.ac_space.shape[0], activation=tf.tanh)
+            for i, fc_layer_units in enumerate(self.layers["head"]):
+                head = self.activ_fn(tf.layers.dense(head, fc_layer_units, name="head_fc{}".format(i)))
+
+            self.policy_pre_activation = tf.layers.dense(head, self.ac_space.shape[0])
+            self.policy = policy = tf.tanh(self.policy_pre_activation)
 
         return policy
 
@@ -321,20 +331,28 @@ class RecurrentPolicy(TD3Policy):
             masks = batch_to_seq(dones, self.n_batch, self.n_steps)
 
             # Double Q values to reduce overestimation
-            for i in range(1, 3):
-                with tf.variable_scope('qf{}'.format(i), reuse=reuse):
-                    ff_branch = self.activ_fn(tf.layers.dense(ff_branch_in, 128, name="ff_fc_0"))
-                    lstm_branch = self.activ_fn(tf.layers.dense(lstm_branch_in, 128, name="lstm_fc_0"))
+            for qf_i in range(1, 3):
+                with tf.variable_scope('qf{}'.format(qf_i), reuse=reuse):
+                    ff_branch, lstm_branch = ff_branch_in, lstm_branch_in
+                    for i, fc_layer_units in enumerate(self.layers["ff"]):
+                        ff_branch = self.activ_fn(tf.layers.dense(ff_branch, fc_layer_units, name="ff_fc{}".format(i)))
+
+                    for i, fc_layer_units in enumerate(self.layers["lstm"]):
+                        lstm_branch = self.activ_fn(tf.layers.dense(lstm_branch, fc_layer_units, name="rnn_fc{}".format(i)))
+
                     lstm_branch = batch_to_seq(lstm_branch, self.n_batch, self.n_steps)
-                    lstm_branch, q_state = lstm(lstm_branch, masks, getattr(self, "qf{}_state_ph".format(i)),
-                                                "lstm_qf{}".format(i), n_hidden=self.n_lstm, layer_norm=self.layer_norm)
-                    setattr(self, "qf{}_state".format(i), q_state)
-                    if self.n_steps > 1:  # TODO: just speculating here
+                    lstm_branch, q_state = lstm(lstm_branch, masks, getattr(self, "qf{}_state_ph".format(qf_i)),
+                                                "lstm_qf{}".format(qf_i), n_hidden=self.n_lstm, layer_norm=self.layer_norm)
+                    setattr(self, "qf{}_state".format(qf_i), q_state)
+                    if self.n_steps > 1:
                         lstm_branch = [lstm_branch[-1]]
                     lstm_branch = seq_to_batch(lstm_branch)
                     head = tf.concat([ff_branch, lstm_branch], axis=-1)
-                    head = mlp(head, [128, 128], self.activ_fn, self.layer_norm)
-                    setattr(self, "qf{}".format(i), tf.layers.dense(head, 1, name="qf{}".format(i)))
+
+                    for i, fc_layer_units in enumerate(self.layers["head"]):
+                        head = self.activ_fn(tf.layers.dense(head, fc_layer_units, name="head_fc{}".format(i)))
+
+                    setattr(self, "qf{}".format(qf_i), tf.layers.dense(head, 1, name="qf{}".format(i)))
 
         return self.qf1, self.qf2
 
@@ -461,8 +479,8 @@ class DRPolicy(RecurrentPolicy):
     """
 
     def __init__(self, sess, ob_space, ac_space, n_env=1, n_steps=1, n_batch=None, reuse=False, **_kwargs):
-        super(DRPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse,
-                                          feature_extraction="mlp", layer_norm=False, **_kwargs)
+        super(DRPolicy, self).__init__(sess, ob_space, ac_space, n_env=n_env, n_steps=n_steps, n_batch=n_batch,
+                                       reuse=reuse, feature_extraction="mlp", layer_norm=False, **_kwargs)
 
 
 register_policy("DRPolicy", DRPolicy)
