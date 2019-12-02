@@ -379,7 +379,7 @@ class RecurrentPolicy(TD3Policy):
                     for i, fc_layer_units in enumerate(self.layers["head"]):
                         head = self.activ_fn(tf.layers.dense(head, fc_layer_units, name="head_fc{}".format(i)))
 
-                    setattr(self, "qf{}".format(qf_i), tf.layers.dense(head, 1, name="qf{}".format(i)))
+                    setattr(self, "qf{}".format(qf_i), tf.layers.dense(head, 1, name="qf{}".format(qf_i)))
 
         return self.qf1, self.qf2
 
