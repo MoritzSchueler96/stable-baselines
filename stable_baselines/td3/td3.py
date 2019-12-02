@@ -312,12 +312,17 @@ class TD3(OffPolicyRLModel):
                     # will be called only every n training steps,
                     # where n is the policy delay
                     policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
-                    policy_train_op = policy_optimizer.minimize(policy_loss, var_list=get_vars('model/pi'))
+                    policy_vars = get_vars("model/pi")
+                    if getattr(self.policy_tf, "share_lstm", False):
+                        policy_vars.extend(get_vars("model/lstm_shared"))
+                    policy_train_op = policy_optimizer.minimize(policy_loss, var_list=policy_vars)
                     self.policy_train_op = policy_train_op
 
                     # Q Values optimizer
                     qvalues_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
                     qvalues_params = get_vars('model/values_fn/')
+                    if getattr(self.policy_tf, "share_lstm", False):
+                        qvalues_params.extend(get_vars("model/lstm_shared"))
 
                     # Q Values and policy target params
                     source_params = get_vars("model/")

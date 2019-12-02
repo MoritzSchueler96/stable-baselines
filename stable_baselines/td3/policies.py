@@ -204,7 +204,7 @@ class RecurrentPolicy(TD3Policy):
     recurrent = True
 
     def __init__(self, sess, ob_space, ac_space, goal_size, my_size, n_env=1, n_steps=1, n_batch=None, reuse=False, layers=None,
-                 cnn_extractor=nature_cnn, feature_extraction="mlp", n_lstm=128,
+                 cnn_extractor=nature_cnn, feature_extraction="mlp", n_lstm=128, share_lstm=False,
                  layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
         #ob_space  # Hack away goal from obs placeholder
         policy_ob_space = copy.deepcopy(ob_space)
@@ -231,6 +231,7 @@ class RecurrentPolicy(TD3Policy):
 
         self.activ_fn = act_fun
         self.n_lstm = n_lstm
+        self.share_lstm = share_lstm
 
         with tf.variable_scope("input", reuse=False):
             self.dones_ph = tf.placeholder(tf.float32, (None,), name="dones_ph")  # (done t-1)
@@ -264,32 +265,48 @@ class RecurrentPolicy(TD3Policy):
         if dones is None:
             dones = self.dones_ph
 
+        pi_h_ff = tf.layers.flatten(obs_ff)
+        pi_h_lstm = tf.layers.flatten(obs_rnn)
+
+        ff_branch = tf.concat([pi_h_ff, goal], axis=-1)
+        lstm_branch = tf.concat([pi_h_lstm, action_rnn], axis=-1)
+
+        if self.share_lstm:
+            with tf.variable_scope("lstm_shared", reuse=tf.AUTO_REUSE):
+                for i, fc_layer_units in enumerate(self.layers["lstm"]):
+                    lstm_branch = self.activ_fn(tf.layers.dense(lstm_branch, fc_layer_units, name="lstm_fc{}".format(i)))
+
+                lstm_branch = batch_to_seq(lstm_branch, n_batch=self.n_batch, n_steps=self.n_steps)
+                masks = batch_to_seq(dones, self.n_batch, self.n_steps)
+                lstm_branch, self.pi_state = lstm(lstm_branch, masks, self.pi_state_ph, 'lstm', n_hidden=self.n_lstm,
+                                                  layer_norm=self.layer_norm)
+
+                if self.n_steps > 1:
+                    lstm_branch = [lstm_branch[-1]]
+                lstm_branch = seq_to_batch(lstm_branch)
+
         #if self.obs_module_indices is not None:
         #    obs = tf.gather(obs, self.obs_module_indices["pi"], axis=-1)
         with tf.variable_scope(scope, reuse=reuse):
             #if self.feature_extraction == "cnn":
             #    pi_h = self.cnn_extractor(obs, name="pi_c1", act_fun=self.activ_fn, **self.cnn_kwargs)
             #else:
-            pi_h_ff = tf.layers.flatten(obs_ff)
-            pi_h_lstm = tf.layers.flatten(obs_rnn)
-
-            ff_branch = tf.concat([pi_h_ff, goal], axis=-1)
-            lstm_branch = tf.concat([pi_h_lstm, action_rnn], axis=-1)
-
             for i, fc_layer_units in enumerate(self.layers["ff"]):
                 ff_branch = self.activ_fn(tf.layers.dense(ff_branch, fc_layer_units, name="ff_fc{}".format(i)))
 
-            for i, fc_layer_units in enumerate(self.layers["lstm"]):
-                lstm_branch = self.activ_fn(tf.layers.dense(lstm_branch, fc_layer_units, name="rnn_fc{}".format(i)))
+            if not self.share_lstm:
+                for i, fc_layer_units in enumerate(self.layers["lstm"]):
+                    lstm_branch = self.activ_fn(tf.layers.dense(lstm_branch, fc_layer_units, name="rnn_fc{}".format(i)))
 
-            lstm_branch = batch_to_seq(lstm_branch, n_batch=self.n_batch, n_steps=self.n_steps)
-            masks = batch_to_seq(dones, self.n_batch, self.n_steps)
-            lstm_branch, self.pi_state = lstm(lstm_branch, masks, self.pi_state_ph, 'lstm_pi', n_hidden=self.n_lstm,
-                                         layer_norm=self.layer_norm)
+                lstm_branch = batch_to_seq(lstm_branch, n_batch=self.n_batch, n_steps=self.n_steps)
+                masks = batch_to_seq(dones, self.n_batch, self.n_steps)
+                lstm_branch, self.pi_state = lstm(lstm_branch, masks, self.pi_state_ph, 'lstm_pi', n_hidden=self.n_lstm,
+                                             layer_norm=self.layer_norm)
 
-            if self.n_steps > 1:
-                lstm_branch = [lstm_branch[-1]]
-            lstm_branch = seq_to_batch(lstm_branch)
+                if self.n_steps > 1:
+                    lstm_branch = [lstm_branch[-1]]
+                lstm_branch = seq_to_batch(lstm_branch)
+
             head = tf.concat([ff_branch, lstm_branch], axis=-1)
 
             for i, fc_layer_units in enumerate(self.layers["head"]):
@@ -314,22 +331,31 @@ class RecurrentPolicy(TD3Policy):
         if dones is None:
             dones = self.dones_ph
 
+        critics_h_ff = tf.layers.flatten(obs_ff)
+        critics_h_lstm = tf.layers.flatten(obs_rnn)
+
+        # Concatenate preprocessed state and action
+        ff_branch_in = tf.concat([critics_h_ff, action_ff, goal, my], axis=-1)
+        lstm_branch_in = tf.concat([critics_h_lstm, action_rnn], axis=-1)
+
+        self.qf1, self.qf2 = None, None
+        self.qf1_state, self.qf2_state = None, None
+
+        masks = batch_to_seq(dones, self.n_batch, self.n_steps)
+
+        if self.share_lstm:
+            with tf.variable_scope("lstm_shared", reuse=tf.AUTO_REUSE):
+                for i, fc_layer_units in enumerate(self.layers["lstm"]):
+                    lstm_branch_s = self.activ_fn(tf.layers.dense(lstm_branch_in, fc_layer_units, name="lstm_fc{}".format(i)))
+
+                lstm_branch_s = batch_to_seq(lstm_branch_s, n_batch=self.n_batch, n_steps=self.n_steps)
+                masks = batch_to_seq(dones, self.n_batch, self.n_steps)
+                lstm_branch_s, q_state = lstm(lstm_branch_s, masks, self.pi_state_ph, 'lstm', n_hidden=self.n_lstm,
+                                                  layer_norm=self.layer_norm)
+
+                self.qf1_state, self.qf2_state = q_state, q_state
+
         with tf.variable_scope(scope, reuse=reuse):
-            #if self.feature_extraction == "cnn" and self.cnn_vf:
-            #    critics_h = self.cnn_extractor(obs, name="vf_c1", act_fun=self.activ_fn, **self.cnn_kwargs)
-            #else:
-            critics_h_ff = tf.layers.flatten(obs_ff)
-            critics_h_lstm = tf.layers.flatten(obs_rnn)
-
-            # Concatenate preprocessed state and action
-            ff_branch_in = tf.concat([critics_h_ff, action_ff, goal, my], axis=-1)
-            lstm_branch_in = tf.concat([critics_h_lstm, action_rnn], axis=-1)
-
-            self.qf1, self.qf2 = None, None
-            self.qf1_state, self.qf2_state = None, None
-
-            masks = batch_to_seq(dones, self.n_batch, self.n_steps)
-
             # Double Q values to reduce overestimation
             for qf_i in range(1, 3):
                 with tf.variable_scope('qf{}'.format(qf_i), reuse=reuse):
@@ -337,13 +363,16 @@ class RecurrentPolicy(TD3Policy):
                     for i, fc_layer_units in enumerate(self.layers["ff"]):
                         ff_branch = self.activ_fn(tf.layers.dense(ff_branch, fc_layer_units, name="ff_fc{}".format(i)))
 
-                    for i, fc_layer_units in enumerate(self.layers["lstm"]):
-                        lstm_branch = self.activ_fn(tf.layers.dense(lstm_branch, fc_layer_units, name="rnn_fc{}".format(i)))
+                    if not self.share_lstm:
+                        for i, fc_layer_units in enumerate(self.layers["lstm"]):
+                            lstm_branch = self.activ_fn(tf.layers.dense(lstm_branch, fc_layer_units, name="rnn_fc{}".format(i)))
 
-                    lstm_branch = batch_to_seq(lstm_branch, self.n_batch, self.n_steps)
-                    lstm_branch, q_state = lstm(lstm_branch, masks, getattr(self, "qf{}_state_ph".format(qf_i)),
-                                                "lstm_qf{}".format(qf_i), n_hidden=self.n_lstm, layer_norm=self.layer_norm)
-                    setattr(self, "qf{}_state".format(qf_i), q_state)
+                        lstm_branch = batch_to_seq(lstm_branch, self.n_batch, self.n_steps)
+                        lstm_branch, q_state = lstm(lstm_branch, masks, getattr(self, "qf{}_state_ph".format(qf_i)),
+                                                    "lstm_qf{}".format(qf_i), n_hidden=self.n_lstm, layer_norm=self.layer_norm)
+                        setattr(self, "qf{}_state".format(qf_i), q_state)
+                    else:
+                        lstm_branch = lstm_branch_s
                     if self.n_steps > 1:
                         lstm_branch = [lstm_branch[-1]]
                     lstm_branch = seq_to_batch(lstm_branch)
