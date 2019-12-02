@@ -217,14 +217,32 @@ class HindsightExperienceReplayWrapper(object):
             sampled_goals = self._sample_achieved_goals(self.episode_transitions, transition_idx)
             # For each sampled goals, store a new transition
             for goal in sampled_goals:
-                # Copy transition to avoid modifying the original one
-                if self.recurrent:
-                    obs, action, reward, next_obs, done, _, _ = copy.deepcopy(transition)
-                else:
+                for transition_idx, transition in enumerate(self.episode_transitions):
                     obs, action, reward, next_obs, done, *extra_data = copy.deepcopy(transition)
+                    # Convert concatenated obs to dict, so we can update the goals
+                    obs_dict, next_obs_dict = map(self.env.convert_obs_to_dict, (obs, next_obs))
+                    # Update the desired goal in the transition
+                    obs_dict['desired_goal'] = goal
+                    next_obs_dict['desired_goal'] = goal
 
-                # Convert concatenated obs to dict, so we can update the goals
-                obs_dict, next_obs_dict = map(self.env.convert_obs_to_dict, (obs, next_obs))
+                    # Update the reward according to the new desired goal
+                    prev_state = obs_dict["achieved_goal"]
+                    achieved_goal = next_obs_dict['achieved_goal']
+                    desired_goal = goal
+                    if self.env.multi_dimensional_obs:
+                        prev_state = prev_state[0]
+                        achieved_goal = achieved_goal[0]
+                        desired_goal = goal[0]
+                    info = {"step": transition_idx, "prev_state": prev_state, "action": action}
+                    reward = self.env.compute_reward(achieved_goal, desired_goal, info)
+                    # Can we use achieved_goal == desired_goal
+
+                    if done:
+                        extra_data = {"my": extra_data[-1]}
+                    else:
+                        extra_data = {}
+
+                    self.replay_buffer.add(obs, action, reward, next_obs, done, goal, **extra_data)
         else:
             for transition_idx, transition in enumerate(self.episode_transitions):
                 if self.recurrent:
@@ -253,10 +271,7 @@ class HindsightExperienceReplayWrapper(object):
                 # For each sampled goals, store a new transition
                 for goal in sampled_goals:
                     # Copy transition to avoid modifying the original one
-                    if self.recurrent:
-                        obs, action, reward, next_obs, done, _, _ = copy.deepcopy(transition)
-                    else:
-                        obs, action, reward, next_obs, done = copy.deepcopy(transition)
+                    obs, action, reward, next_obs, done, *extra_data = copy.deepcopy(transition)
 
                     # Convert concatenated obs to dict, so we can update the goals
                     obs_dict, next_obs_dict = map(self.env.convert_obs_to_dict, (obs, next_obs))
