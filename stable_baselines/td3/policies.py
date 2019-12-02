@@ -270,7 +270,7 @@ class RecurrentPolicy(TD3Policy):
         lstm_branch = tf.concat([pi_h_lstm, action_rnn], axis=-1)
 
         if self.share_lstm:
-            with tf.variable_scope("lstm_shared", reuse=tf.AUTO_REUSE):
+            with tf.variable_scope("shared", reuse=tf.AUTO_REUSE):
                 for i, fc_layer_units in enumerate(self.layers["lstm"]):
                     lstm_branch = self.activ_fn(tf.layers.dense(lstm_branch, fc_layer_units, name="lstm_fc{}".format(i)))
 
@@ -342,7 +342,7 @@ class RecurrentPolicy(TD3Policy):
         masks = batch_to_seq(dones, self.n_batch, self.n_steps)
 
         if self.share_lstm:
-            with tf.variable_scope("lstm_shared", reuse=tf.AUTO_REUSE):
+            with tf.variable_scope("shared", reuse=tf.AUTO_REUSE):
                 for i, fc_layer_units in enumerate(self.layers["lstm"]):
                     lstm_branch_s = self.activ_fn(tf.layers.dense(lstm_branch_in, fc_layer_units, name="lstm_fc{}".format(i)))
 
