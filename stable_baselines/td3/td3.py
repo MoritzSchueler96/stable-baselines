@@ -5,7 +5,6 @@ import warnings
 import numpy as np
 import tensorflow as tf
 
-from stable_baselines import logger
 from stable_baselines.her import HindsightExperienceReplayWrapper, HERGoalEnvWrapper
 from stable_baselines.common import tf_util, OffPolicyRLModel, SetVerbosity, TensorboardWriter
 from stable_baselines.common.vec_env import VecEnv
@@ -319,14 +318,16 @@ class TD3(OffPolicyRLModel):
                     # will be called only every n training steps,
                     # where n is the policy delay
                     policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
-                    pi_var_list = tf_util.get_trainable_vars('model/pi')
-                    if self.recurrent_policy:
-                        pi_var_list = [var for var in pi_var_list if "act" not in var.name]
-                    policy_train_op = policy_optimizer.minimize(policy_loss, var_list=pi_var_list)
+                    policy_vars = tf_util.get_trainable_vars("model/pi")
+                    if getattr(self.policy_tf, "share_lstm", False):
+                        policy_vars.extend(tf_util.get_trainable_vars("model/lstm_shared"))
+                    policy_train_op = tf_util.get_trainable_vars.minimize(policy_loss, var_list=policy_vars)
                     self.policy_train_op = policy_train_op
                     # Q Values optimizer
                     qvalues_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
                     qvalues_params = tf_util.get_trainable_vars('model/values_fn/')
+                    if getattr(self.policy_tf, "share_lstm", False):
+                        qvalues_params.extend(tf_util.get_trainable_vars("model/lstm_shared"))
 
                     # Q Values and policy target params
                     source_params = tf_util.get_trainable_vars("model/")
