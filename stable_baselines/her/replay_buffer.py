@@ -195,27 +195,12 @@ class HindsightExperienceReplayWrapper(object):
                 self.stable_indices = self.stable_indices[np.all((achieved_goals[self.stable_indices] - achieved_goals[0]) >= np.array([0.05, 0.05, 0]))]
                 #self.stable_indices = self.stable_indices[np.all(achieved_goals[self.stable_indices] >= self.legal_goal_low, axis=1) & np.all(achieved_goals[self.stable_indices] <= self.legal_goal_high, axis=1)]
 
-        for transition_idx, transition in enumerate(self.episode_transitions):
-            obs_t, action, reward, obs_tp1, done, *extra_data = transition
-            # Add to the replay buffer
-            if self.replay_buffer.__name__ == "StableReplayBuffer":
-                self.replay_buffer.add(obs_t, action, reward, obs_tp1, done, tot_achieved_goal_changes)
-            else:
-                self.replay_buffer.add(obs_t, action, reward, obs_tp1, done, *extra_data)
+        if self.replay_buffer.__name__ == "EpisodicRecurrentReplayBuffer":
+            for transition in self.episode_transitions:
+                self.replay_buffer.add(*transition)
+            self.replay_buffer.store_episode(self.episode_transitions[-1][-1])
+            sampled_goals = self._sample_achieved_goals(self.episode_transitions, 0)
 
-            if self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE and (self.stable_indices.shape[0] == 0 or transition_idx >= self.stable_indices[-1]):
-                continue
-
-            # We cannot sample a goal from the future in the last step of an episode
-            if transition_idx == len(self.episode_transitions) - 1 and self.goal_selection_strategy == GoalSelectionStrategy.FUTURE:
-                break
-            elif transition_idx >= len(self.episode_transitions) - 2 and self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
-                continue
-
-            # Sampled n goals per transition, where n is `n_sampled_goal`
-            # this is called k in the paper
-            sampled_goals = self._sample_achieved_goals(self.episode_transitions, transition_idx)
-            # For each sampled goals, store a new transition
             for goal in sampled_goals:
                 for transition_idx, transition in enumerate(self.episode_transitions):
                     obs, action, reward, next_obs, done, *extra_data = copy.deepcopy(transition)
@@ -243,6 +228,7 @@ class HindsightExperienceReplayWrapper(object):
                         extra_data = {}
 
                     self.replay_buffer.add(obs, action, reward, next_obs, done, goal, **extra_data)
+                self.replay_buffer.store_episode(self.episode_transitions[-1][-1])
         else:
             for transition_idx, transition in enumerate(self.episode_transitions):
                 if self.recurrent:
