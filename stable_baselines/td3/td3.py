@@ -558,8 +558,8 @@ class TD3(OffPolicyRLModel):
                         extra_data["my"] = self._get_env_parameters()
                 if self.time_aware:
                     bootstrap = True
-                    info_time_limit = info.get("TimeLimit.truncated", None)
                     if done:
+                        info_time_limit = info.get("TimeLimit.truncated", None)
                         bootstrap = info.get("termination", None) == "steps" or \
                                     (info_time_limit is not None and info_time_limit)
                     extra_data["bootstrap"] = bootstrap
