@@ -159,14 +159,20 @@ class EpisodicRecurrentReplayBuffer(ReplayBuffer):
         self._current_episode_data.append((obs_t, action, reward, obs_tp1, done, goal))
 
         if done:
-            if self._next_idx >= len(self._storage):
-                self._storage.append(self._current_episode_data)
-                self._episode_my.append(my)
-            else:
-                self._storage[self._next_idx] = self._current_episode_data
-                self._episode_my[self._next_idx] = my
-            self._next_idx = (self._next_idx + 1) % self._maxsize
-            self._current_episode_data = []
+            self.store_episode(my)
+
+    def store_episode(self, my):
+        if len(self._current_episode_data) == 0:
+            return
+
+        if self._next_idx >= len(self._storage):
+            self._storage.append(self._current_episode_data)
+            self._episode_my.append(my)
+        else:
+            self._storage[self._next_idx] = self._current_episode_data
+            self._episode_my[self._next_idx] = my
+        self._next_idx = (self._next_idx + 1) % self._maxsize
+        self._current_episode_data = []
 
     def _encode_sample(self, idxes):
         obses_t, actions, rewards, obses_tp1, dones, goals, a_prevs, mys = [], [], [], [], [], [], [], []

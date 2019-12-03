@@ -198,6 +198,7 @@ class HindsightExperienceReplayWrapper(object):
         if self.replay_buffer.__name__ == "EpisodicRecurrentReplayBuffer":
             for transition in self.episode_transitions:
                 self.replay_buffer.add(*transition)
+            self.replay_buffer.store_episode(self.episode_transitions[-1][-1])
             sampled_goals = self._sample_achieved_goals(self.episode_transitions, 0)
             for goal in sampled_goals:
                 for transition_idx, transition in enumerate(self.episode_transitions):
@@ -226,6 +227,7 @@ class HindsightExperienceReplayWrapper(object):
                         extra_data = {}
 
                     self.replay_buffer.add(obs, action, reward, next_obs, done, goal, **extra_data)
+                self.replay_buffer.store_episode(self.episode_transitions[-1][-1])
         else:
             for transition_idx, transition in enumerate(self.episode_transitions):
                 obs_t, action, reward, obs_tp1, done, *extra_data = transition
