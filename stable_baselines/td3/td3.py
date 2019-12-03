@@ -64,7 +64,7 @@ class TD3(OffPolicyRLModel):
                  target_policy_noise=0.2, target_noise_clip=0.5,
                  random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, time_aware=False,
-                 recurrent_scan_length=0):
+                 recurrent_scan_length=0, reward_transformation=None):
 
         super(TD3, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=TD3Policy, requires_vec_env=False, policy_kwargs=policy_kwargs)
@@ -91,6 +91,8 @@ class TD3(OffPolicyRLModel):
 
         self.time_aware = time_aware
         self.recurrent_scan_length = recurrent_scan_length
+
+        self.reward_transformation = reward_transformation
 
         self.graph = None
         self.replay_buffer = None
@@ -522,6 +524,9 @@ class TD3(OffPolicyRLModel):
                 assert action.shape == self.env.action_space.shape
 
                 new_obs, reward, done, info = self.env.step(rescaled_action)
+
+                if self.reward_transformation is not None:
+                    reward = self.reward_transformation(reward)
 
                 # Store transition in the replay buffer.
                 extra_data = {}
