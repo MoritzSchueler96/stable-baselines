@@ -506,7 +506,6 @@ class DDPG(OffPolicyRLModel):
             logger.info('setting up critic optimizer')
         normalized_critic_target_tf = tf.clip_by_value(normalize(self.critic_target, self.ret_rms),
                                                        self.return_range[0], self.return_range[1])
-        self.normalized_critic_target_tf = normalized_critic_target_tf
         self.critic_loss = tf.reduce_mean(tf.square(self.normalized_critic_tf - normalized_critic_target_tf))
         if self.critic_l2_reg > 0.:
             critic_reg_vars = [var for var in tf_util.get_trainable_vars('model/qf/')
@@ -820,8 +819,6 @@ class DDPG(OffPolicyRLModel):
                 logger.log('Using agent with the following configuration:')
                 logger.log(str(self.__dict__.items()))
 
-            ep_info_buf = deque(maxlen=100)
-
             eval_episode_rewards_history = deque(maxlen=100)
             episode_rewards_history = deque(maxlen=100)
             self.episode_reward = np.zeros((1,))
@@ -875,11 +872,6 @@ class DDPG(OffPolicyRLModel):
                                 rescaled_action = action * np.abs(self.action_space.low)
 
                             new_obs, reward, done, info = self.env.step(rescaled_action)
-
-                            # Retrieve reward and episode length if using Monitor wrapper
-                            maybe_ep_info = info.get('episode')
-                            if maybe_ep_info is not None:
-                                ep_info_buf.extend([maybe_ep_info])
 
                             if writer is not None:
                                 ep_rew = np.array([reward]).reshape((1, -1))

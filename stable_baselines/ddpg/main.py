@@ -12,7 +12,6 @@ from stable_baselines.common.misc_util import set_global_seeds, boolean_flag
 from stable_baselines.ddpg.policies import MlpPolicy, LnMlpPolicy
 from stable_baselines.ddpg import DDPG
 from stable_baselines.ddpg.noise import AdaptiveParamNoiseSpec, OrnsteinUhlenbeckActionNoise, NormalActionNoise
-from gym_fixed_wing.fixed_wing import FixedWingAircraft
 
 
 def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
@@ -34,7 +33,7 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
         logger.set_level(logger.DISABLED)
 
     # Create envs.
-    env = FixedWingAircraft("../../../rl-uav/configs/env_config_ddpg.json")#gym.make(env_id)
+    env = gym.make(env_id)
     env = bench.Monitor(env, logger.get_dir() and os.path.join(logger.get_dir(), str(rank)))
 
     if evaluation and rank == 0:
