@@ -14,7 +14,7 @@ from stable_baselines.ddpg import DDPG
 from stable_baselines.ddpg.noise import AdaptiveParamNoiseSpec, OrnsteinUhlenbeckActionNoise, NormalActionNoise
 
 
-def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
+def run(env_id, seed, noise_type, layer_norm, evaluation, save_path, **kwargs):
     """
     run the training of DDPG
 
@@ -90,6 +90,8 @@ def run(env_id, seed, noise_type, layer_norm, evaluation, **kwargs):
                  action_noise=action_noise, buffer_size=int(1e6), verbose=2, **kwargs)
     model.learn(total_timesteps=num_timesteps)
     env.close()
+    if save_path != "":
+        model.save(save_path)
     if eval_env is not None:
         eval_env.close()
     if rank == 0:
@@ -117,6 +119,7 @@ def parse_args():
     parser.add_argument('--critic-lr', type=float, default=1e-3)
     boolean_flag(parser, 'enable-popart', default=False)
     parser.add_argument('--gamma', type=float, default=0.99)
+    parser.add_argument('--tau', type=float, default=0.005)
     parser.add_argument('--reward-scale', type=float, default=1.)
     parser.add_argument('--clip-norm', type=float, default=None)
     parser.add_argument('--nb-train-steps', type=int, default=50)  # per epoch cycle and MPI worker
@@ -125,6 +128,7 @@ def parse_args():
     # choices are adaptive-param_xx, ou_xx, normal_xx, none
     parser.add_argument('--noise-type', type=str, default='adaptive-param_0.2')
     parser.add_argument('--num-timesteps', type=int, default=int(1e6))
+    parser.add_argument('--save-path', type=str, default="")
     boolean_flag(parser, 'evaluation', default=False)
     args = parser.parse_args()
     dict_args = vars(args)

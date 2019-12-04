@@ -1089,7 +1089,8 @@ class DDPG(OffPolicyRLModel):
             "policy": self.policy,
             "n_envs": self.n_envs,
             "_vectorize_action": self._vectorize_action,
-            "policy_kwargs": self.policy_kwargs
+            "policy_kwargs": self.policy_kwargs,
+            "replay_buffer": self.replay_buffer
         }
 
         params_to_save = self.get_parameters()
