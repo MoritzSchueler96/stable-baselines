@@ -823,6 +823,7 @@ class DDPG(OffPolicyRLModel):
             episode_rewards_history = deque(maxlen=100)
             self.episode_reward = np.zeros((1,))
             episode_successes = []
+            ep_info_buf = deque(maxlen=100)
             with self.sess.as_default(), self.graph.as_default():
                 # Prepare everything.
                 self._reset()
@@ -891,6 +892,12 @@ class DDPG(OffPolicyRLModel):
                             epoch_qs.append(q_value)
                             self._store_transition(obs, action, reward, new_obs, done)
                             obs = new_obs
+
+                            # Retrieve reward and episode length if using Monitor wrapper
+                            maybe_ep_info = info.get('episode')
+                            if maybe_ep_info is not None:
+                                ep_info_buf.extend([maybe_ep_info])
+                                
                             if callback is not None:
                                 # Only stop training if return value is False, not when it is None.
                                 # This is for backwards compatibility with callbacks that have no return statement.
