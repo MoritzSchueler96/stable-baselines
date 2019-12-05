@@ -644,6 +644,67 @@ class TD3(OffPolicyRLModel):
                     infos_values = []
             return self
 
+    def batch_learn(self, total_timesteps, dataset, log_interval=None, callback=None, seed=None, tb_log_name="TD3", reset_num_timesteps=True):
+        new_tb_log = self._init_num_timesteps(reset_num_timesteps)
+
+        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
+                as writer:
+            self._setup_learn(seed)
+
+            if isinstance(dataset, str):
+                data, _ = self._load_from_file(dataset)
+                self.replay_buffer = data["replay_buffer"]
+                del data
+            else:
+                self.replay_buffer = dataset
+
+            # Transform to callable if needed
+            self.learning_rate = get_schedule_fn(self.learning_rate)
+            # Initial learning rate
+            current_lr = self.learning_rate(1)
+            initial_step = self.num_timesteps
+            n_updates = 0
+            mb_infos_vals = []
+
+            for step in range(initial_step, total_timesteps):
+                if callback is not None:
+                    # Only stop training if return value is False, not when it is None. This is for backwards
+                    # compatibility with callbacks that have no return statement.
+                    if callback(locals(), globals()) is False:
+                        break
+                n_updates += 1
+                # Compute current learning_rate
+                frac = 1.0 - self.num_timesteps / total_timesteps
+                current_lr = self.learning_rate(frac)
+                # Update policy and critics (q functions)
+                # Note: the policy is updated less frequently than the Q functions
+                # this is controlled by the `policy_delay` parameter
+                step_writer = writer if step % self.write_freq == 0 else None
+                mb_infos_vals.append(
+                    self._train_step(step, step_writer, current_lr, step % self.policy_delay == 0))
+
+                # Log losses and entropy, useful for monitor training
+
+                if self.verbose >= 1 and log_interval is not None and step % log_interval == 0:
+                    infos_values = np.mean(mb_infos_vals, axis=0)
+                    for (name, val) in zip(self.infos_names, infos_values):
+                        logger.logkv(name, val)
+                    mb_infos_vals = []
+
+                    fps = int(step / (time.time() - start_time))
+                    logger.logkv("n_updates", n_updates)
+                    logger.logkv("current_lr", current_lr)
+                    logger.logkv("fps", fps)
+                    logger.logkv('time_elapsed', int(time.time() - start_time))
+                    if len(infos_values) > 0:
+                        for (name, val) in zip(self.infos_names, infos_values):
+                            logger.logkv(name, val)
+                    logger.logkv("total timesteps", self.num_timesteps)
+                    logger.dumpkvs()
+                self.num_timesteps += 1
+
+        return self
+
     def action_probability(self, observation, state=None, mask=None, actions=None, logp=False):
         _ = np.array(observation)
 
