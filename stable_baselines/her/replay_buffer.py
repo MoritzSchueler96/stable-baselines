@@ -255,5 +255,5 @@ class HindsightExperienceReplayWrapper(object):
                 elif self.replay_buffer.__name__ == "DRRecurrentReplayBuffer":
                     self.replay_buffer.add_her(goal, reward, transition_idx)
                 else:
-                    self.replay_buffer.add(obs, action, reward, next_obs, done, *extra_data) 
+                    self.replay_buffer.add(obs, action, reward, next_obs, done, *extra_data)
 

@@ -363,7 +363,7 @@ class DRRecurrentReplayBuffer(RecurrentReplayBuffer):
             hists_a.extend(hist_a)
             goals.append(np.array(goal, copy=False))
             mys.append(np.array(self._episode_my[ep_i], copy=False))
-        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), np.array(goals), np.array(hists_o), np.array(hists_a), np.array(mys)
+        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), {"goal": np.array(goals), "obs_rnn": np.array(hists_o), "action_prev": np.array(hists_a), "my": np.array(mys)}
 
 
 class PrioritizedReplayBuffer(ReplayBuffer):
@@ -466,7 +466,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         p_sample = self._it_sum[idxes] / self._it_sum.sum()
         weights = (p_sample * len(self._storage)) ** (-beta) / max_weight
         encoded_sample = self._encode_sample(idxes, env=env)
-        return tuple(list(encoded_sample) + [weights, idxes])
+        return tuple(list(encoded_sample) + {"is_weights": weights, "idxs": idxes})
 
     def update_priorities(self, idxes, priorities):
         """
