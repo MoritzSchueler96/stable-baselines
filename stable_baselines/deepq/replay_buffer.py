@@ -217,8 +217,8 @@ class DRRecurrentReplayBuffer(RecurrentReplayBuffer):
                 hist_o.append(np.array(obs_t))
                 hist_a.append(np.array(ep_data[ep_t - 1][1]))
             else:
-                hist_o = obs_t
-                hist_a = ep_data[ep_t - 1][1]
+                hist_o = [obs_t]
+                hist_a = [ep_data[ep_t - 1][1]]
             obses_t.append(np.array(obs_t, copy=False))
             actions.append(np.array(action, copy=False))
             rewards.append(reward)
