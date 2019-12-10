@@ -226,8 +226,7 @@ class EpisodicRecurrentReplayBuffer(ReplayBuffer):
 
             # TODO: rnn reset same as done?
 
-        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), np.array(
-            goals), np.array(a_prevs), np.array(resets), np.array(mys)
+        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), {"goal": np.array(goals), "action_prev": np.array(a_prevs), "reset": np.array(resets), "my": np.array(mys)}
 
     def __len__(self):
         return sum([len(episode) for episode in self._storage])
