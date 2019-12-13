@@ -180,6 +180,7 @@ class FeedForwardPolicy(TD3Policy):
             obs = np.expand_dims(obs, axis=0)
         return self.sess.run(self.q_discrepancy, {self.obs_ph: obs})
 
+
 # TODO: mark as abstract
 class RecurrentPolicy(TD3Policy):
     """
@@ -229,9 +230,6 @@ class RecurrentPolicy(TD3Policy):
             self.pi_state_ph = tf.placeholder(tf.float32, (1, self.n_lstm * 2), name="pi_state_ph")
             self.qf1_state_ph = tf.placeholder(tf.float32, (1, self.n_lstm * 2), name="qf1_state_ph")
             self.qf2_state_ph = tf.placeholder(tf.float32, (1, self.n_lstm * 2), name="qf2_state_ph")
-            obs_rnn_shape = [dim for dim in self.processed_obs.shape]
-            obs_rnn_shape[0] *= self.n_steps
-            self.obs_rnn_ph = tf.placeholder(tf.float32, shape=obs_rnn_shape, name="obs_rnn_ph")
 
         self.pi_initial_state = np.zeros((1, self.n_lstm * 2), dtype=np.float32)
         self.qf1_initial_state = np.zeros((1, self.n_lstm * 2), dtype=np.float32)
@@ -241,7 +239,9 @@ class RecurrentPolicy(TD3Policy):
         self.qf1_state = None
         self.qf2_state = None
 
-        self.required_phs = []
+        self.extra_phs = []
+        self.rnn_inputs = []
+        self.extra_data_names = []
 
     def make_actor(self, ff_phs=None, rnn_phs=None, dones=None, reuse=False, scope="pi"):
         lstm_branch = tf.concat([tf.layers.flatten(ph) for ph in rnn_phs], axis=-1)
@@ -348,7 +348,6 @@ class RecurrentPolicy(TD3Policy):
                     if self.n_steps > 1:
                         lstm_branch = [lstm_branch[-1]]
                     lstm_branch = seq_to_batch(lstm_branch)
-
                     if self.layers["ff"] is not None:
                         head = tf.concat([ff_branch, lstm_branch], axis=-1)
                     else:
@@ -367,9 +366,6 @@ class RecurrentPolicy(TD3Policy):
     @property
     def initial_state(self):
         return self.pi_initial_state
-
-    def get_required_phs(self):
-        return self.required_phs
 
 
 class DRPolicy(RecurrentPolicy):
@@ -395,73 +391,95 @@ class DRPolicy(RecurrentPolicy):
     def __init__(self, sess, ob_space, ac_space, goal_size, my_size, n_env=1, n_steps=1, n_batch=None, reuse=False, layers=None,
                  cnn_extractor=nature_cnn, feature_extraction="mlp", n_lstm=128, share_lstm=False,
                  layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
-        #ob_space  # Hack away goal from obs placeholder
-        policy_ob_space = copy.deepcopy(ob_space)
-        policy_ob_space.low = policy_ob_space.low[:-goal_size]
-        policy_ob_space.high = policy_ob_space.high[:-goal_size]
-        policy_ob_space.shape = policy_ob_space.high.shape
         if layers is None:
             layers = {"ff": [128], "lstm": [128], "head": [128, 128]}
-        super().__init__(sess, policy_ob_space, ac_space, layers, n_env, n_steps, n_batch,
+        super().__init__(sess, ob_space, ac_space, layers, n_env, n_steps, n_batch * n_steps,
                                                 reuse=reuse, cnn_extractor=cnn_extractor,
                                                 feature_extraction=feature_extraction, n_lstm=n_lstm,
                                                 share_lstm=share_lstm, layer_norm=layer_norm, act_fun=act_fun,
                                                 obs_module_indices=obs_module_indices, **kwargs)
 
+        self.n_batch = n_batch  # TODO: fix this in a less hacky way?
+
         with tf.variable_scope("input", reuse=False):
-            self.goal_ph = tf.placeholder(tf.float32, (None, goal_size), name="goal_ph")
-            self.action_prev_ph = tf.placeholder(tf.float32, (None,) + ac_space.shape, name="action_prev_ph")
+            self.action_prev_rnn_ph = tf.placeholder(tf.float32, (None,) + ac_space.shape, name="action_prev_ph")
             self.my_ph = tf.placeholder(tf.float32, (None, my_size), name="my_ph")  # the dynamics of the environment
-            obs_rnn_shape = [dim for dim in self.processed_obs.shape]
-            obs_rnn_shape[0] *= self.n_steps
-            self.obs_rnn_ph = tf.placeholder(tf.float32, shape=obs_rnn_shape, name="obs_rnn_ph")
 
-        self.required_phs = ["goal", "my", "action_prev", "obs_rnn"]
+        self.action_prev = np.zeros((1, *self.ac_space.shape))
+        self.goal_size = goal_size
+        self.extra_phs = ["action_prev_rnn", "my", "target_action_prev_rnn"]
+        self.rnn_inputs = ["obs", "action_prev_rnn", "target_action_prev_rnn", "obs_tp1"]
+        self.extra_data_names = ["action_prev_rnn", "my", "target_action_prev_rnn"]
 
-    def make_actor(self, obs_ff=None, goal=None, obs_rnn=None, action_prev=None, dones=None, reuse=False, scope="pi"):
+    def make_actor(self, obs_ff=None, obs_rnn=None, action_prev=None, dones=None, reuse=False, scope="pi"):
         if obs_ff is None:
             obs_ff = self.processed_obs
-        if goal is None:
-            goal = self.goal_ph
         if obs_rnn is None:
             obs_rnn = self.processed_obs
         if action_prev is None:
-            action_prev = self.action_prev_ph
+            action_prev = self.action_prev_rnn_ph
+
+        if self.n_steps > 1:
+            obs_ff = obs_ff[::self.n_steps, :]
+        obs_ff, goal = obs_ff[:, :-self.goal_size], obs_ff[:, -self.goal_size:]
+        obs_rnn = obs_rnn[:, :-self.goal_size]
 
         ff_phs = [obs_ff, goal]
         rnn_phs = [obs_rnn, action_prev]
         return super().make_actor(ff_phs=ff_phs, rnn_phs=rnn_phs, dones=dones, reuse=reuse, scope=scope)
 
-    def make_critics(self, obs_ff=None, action_ff=None, goal=None, my=None, obs_rnn=None, action_prev=None, dones=None, reuse=False, scope="values_fn"):
+    def make_critics(self, obs_ff=None, action_ff=None, my=None, obs_rnn=None, action_prev=None, dones=None, reuse=False, scope="values_fn"):
         if obs_ff is None:
             obs_ff = self.processed_obs
         if action_ff is None:
             action_ff = self.action_ph
         if my is None:
             my = self.my_ph
-        if goal is None:
-            goal = self.goal_ph
         if obs_rnn is None:
             obs_rnn = self.processed_obs
         if action_prev is None:
-            action_prev = self.action_prev_ph
+            action_prev = self.action_prev_rnn_ph
+
+        if self.n_steps > 1:
+            obs_ff = obs_ff[::self.n_steps, :]
+        obs_ff, goal = obs_ff[:, :-self.goal_size], obs_ff[:, -self.goal_size:]
+        obs_rnn = obs_rnn[:, :-self.goal_size]
 
         ff_phs = [obs_ff, goal, my, action_ff]
         rnn_phs = [obs_rnn, action_prev]
         return super().make_critics(ff_phs=ff_phs, rnn_phs=rnn_phs, dones=dones, reuse=reuse, scope=scope)
 
-    def step(self, obs, state=None, goal=None, action_prev=None, mask=None, obs_rnn=None):
+    def step(self, obs, state=None, action_prev=None, mask=None):
         if state is None:
             state = self.initial_state
-        if obs_rnn is None:
-            obs_rnn = obs
-        return self.sess.run([self.policy, self.pi_state],
-                            {self.obs_ph: obs, self.goal_ph: goal, self.pi_state_ph: state, self.dones_ph: mask,
-                            self.action_prev_ph: action_prev, self.obs_rnn_ph: obs_rnn})
+        if action_prev is None:
+            assert obs.shape[0] == 1
+            if mask[0]:
+                self.action_prev = np.zeros((1, *self.ac_space.shape))
+            action_prev = self.action_prev
+
+        action, out_state = self.sess.run([self.policy, self.pi_state],
+                            {self.obs_ph: obs, self.pi_state_ph: state, self.dones_ph: mask,
+                            self.action_prev_rnn_ph: action_prev})
+        self.action_prev = action
+
+        return action, out_state
 
     @property
     def initial_state(self):
         return self.pi_initial_state
+
+    def collect_data(self, _locals, _globals):
+        data = {}
+        if len(_locals["episode_data"]) == 0:
+            data["action_prev_rnn"] = np.zeros(self.ac_space.shape)
+        else:
+            data["action_prev_rnn"] = _locals["episode_data"][-1]["action"]
+        if "my" not in _locals or _locals["ep_data"]:
+            data["my"] = np.zeros((37,))#_locals["self"].env._get_env_parameters()
+        data["action_tp1_prev_rnn"] = _locals["action"]
+
+        return data
 
 
 class LstmMlpPolicy(RecurrentPolicy):
@@ -472,7 +490,7 @@ class LstmMlpPolicy(RecurrentPolicy):
                  cnn_extractor=nature_cnn, feature_extraction="mlp", n_lstm=128, share_lstm=False,
                  layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
         if layers is None:
-            layers = {"ff": None, "lstm": [], "head": [64, 64]}
+            layers = {"ff": None, "lstm": [], "head": [256, 128]}
         else:
             assert layers["ff"] is None
         super().__init__(sess, ob_space, ac_space, layers, n_env, n_steps, n_batch,
@@ -502,6 +520,56 @@ class LstmMlpPolicy(RecurrentPolicy):
     def step(self, obs, state=None, mask=None):
         if state is None:
             state = self.initial_state
+        if mask is None:
+            mask = np.array([False])
+
+        return self.sess.run([self.policy, self.pi_state],
+                             {self.obs_ph: obs, self.pi_state_ph: state, self.dones_ph: mask})
+
+    @property
+    def initial_state(self):
+        return self.pi_initial_state
+
+
+class LstmFFMlpPolicy(RecurrentPolicy):
+    recurrent = True
+
+    def __init__(self, sess, ob_space, ac_space, n_env=1, n_steps=1, n_batch=None, reuse=False,
+                 layers=None,
+                 cnn_extractor=nature_cnn, feature_extraction="mlp", n_lstm=128, share_lstm=False,
+                 layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
+        if layers is None:
+            layers = {"ff": [], "lstm": [], "head": [64, 64]}
+
+        super().__init__(sess, ob_space, ac_space, layers, n_env, n_steps, n_batch,
+                         reuse=reuse, cnn_extractor=cnn_extractor,
+                         feature_extraction=feature_extraction, n_lstm=n_lstm,
+                         share_lstm=share_lstm, layer_norm=layer_norm, act_fun=act_fun,
+                         obs_module_indices=obs_module_indices, **kwargs)
+
+    def make_actor(self, obs=None, dones=None, reuse=False, scope="pi"):
+        if obs is None:
+            obs = self.processed_obs
+
+        ff_phs = [obs]
+        rnn_phs = [obs]
+        return super().make_actor(ff_phs=ff_phs, rnn_phs=rnn_phs, dones=dones, reuse=reuse, scope=scope)
+
+    def make_critics(self, obs=None, action=None, dones=None, reuse=False, scope="values_fn"):
+        if obs is None:
+            obs = self.processed_obs
+        if action is None:
+            action = self.action_ph
+
+        ff_phs = [obs, action]
+        rnn_phs = [obs, action]
+        return super().make_critics(ff_phs=ff_phs, rnn_phs=rnn_phs, dones=dones, reuse=reuse, scope=scope)
+
+    def step(self, obs, state=None, mask=None):
+        if state is None:
+            state = self.initial_state
+        if mask is None:
+            mask = np.array([False])
 
         return self.sess.run([self.policy, self.pi_state],
                              {self.obs_ph: obs, self.pi_state_ph: state, self.dones_ph: mask})
@@ -802,6 +870,7 @@ class LnMlpPolicy(FeedForwardPolicy):
                                           feature_extraction="mlp", layer_norm=True, **_kwargs)
 
 
+register_policy("LstmFFMlpPolicy", LstmFFMlpPolicy)
 register_policy("LstmMlpPolicy", LstmMlpPolicy)
 register_policy("DRPolicy", DRPolicy)
 register_policy("CnnPolicy", CnnPolicy)
