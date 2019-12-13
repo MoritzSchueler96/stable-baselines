@@ -104,7 +104,17 @@ class HindsightExperienceReplayWrapper(object):
             self.episode_transitions = []
 
     def sample(self, *args, **kwargs):
-        return self.replay_buffer.sample(*args, **kwargs)
+        batch = self.replay_buffer.sample(*args, **kwargs)
+        if self.replay_buffer.__name__ == "RecurrentReplayBuffer" and self.replay_buffer.scan_length > 0:
+            # TODO: i think it is guaranteed that there are always scan_length instances but im not sure
+            obs, next_obs = batch[0], batch[3]
+            sampled_goals = obs[::self.replay_buffer.scan_length + 1, -self.env.goal_dim:]
+            sampled_goals = np.repeat(sampled_goals, self.replay_buffer.scan_length + 1, axis=0)
+            obs[:, -self.env.goal_dim:] = sampled_goals
+            next_obs[:, -self.env.goal_dim:] = sampled_goals
+            batch[0], batch[3] = obs, next_obs
+
+        return batch
 
     def can_sample(self, n_samples):
         """
@@ -198,7 +208,7 @@ class HindsightExperienceReplayWrapper(object):
         if self.replay_buffer.__name__ == "EpisodicRecurrentReplayBuffer":
             for transition in self.episode_transitions:
                 self.replay_buffer.add(*transition)
-            self.replay_buffer.store_episode(self.episode_transitions[-1][-1])
+            self.replay_buffer.store_episode()
             sampled_goals = self._sample_achieved_goals(self.episode_transitions, 0)
             for goal in sampled_goals:
                 for transition_idx, transition in enumerate(self.episode_transitions):
@@ -220,14 +230,10 @@ class HindsightExperienceReplayWrapper(object):
                     info = {"step": transition_idx, "prev_state": prev_state, "action": action}
                     reward = self.env.compute_reward(achieved_goal, desired_goal, info)
                     # Can we use achieved_goal == desired_goal
+                    obs, next_obs = map(self.env.convert_dict_to_obs, (obs_dict, next_obs_dict))
 
-                    if done:
-                        extra_data = {"my": extra_data[-1]}
-                    else:
-                        extra_data = {}
-
-                    self.replay_buffer.add(obs, action, reward, next_obs, done, goal, **extra_data)
-                self.replay_buffer.store_episode(self.episode_transitions[-1][-1])
+                    self.replay_buffer.add(obs, action, reward, next_obs, done, *extra_data)
+                self.replay_buffer.store_episode()
         else:
             for transition_idx, transition in enumerate(self.episode_transitions):
                 obs_t, action, reward, obs_tp1, done, *extra_data = transition
@@ -279,7 +285,7 @@ class HindsightExperienceReplayWrapper(object):
                     # Add artificial transition to the replay buffer
                     if self.replay_buffer.__name__ == "StableReplayBuffer":
                         self.replay_buffer.add(obs, action, reward, next_obs, done, tot_achieved_goal_changes)
-                    elif self.replay_buffer.__name__ == "DRRecurrentReplayBuffer":
-                        self.replay_buffer.add_her(goal, reward, transition_idx)
+                    elif self.replay_buffer.__name__ == "RecurrentReplayBuffer":
+                        self.replay_buffer.add_her(obs, next_obs, reward, transition_idx)
                     else:
                         self.replay_buffer.add(obs, action, reward, next_obs, done, *extra_data)

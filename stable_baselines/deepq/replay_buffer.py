@@ -96,19 +96,29 @@ class ReplayBuffer(object):
         idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]
         return self._encode_sample(idxes)
 
-# TODO: add for dynamics randomization which also takes in my, and support for HER?
+
+# TODO: lots of work to do on this one
 class RecurrentReplayBuffer(ReplayBuffer):
     __name__ = "RecurrentReplayBuffer"
 
-    def __init__(self, size, episode_length, scan_length):
-        super(RecurrentReplayBuffer, self).__init__(size)
-        self._current_episode_data = []
+    def __init__(self, size, episode_length, scan_length, rnn_inputs=(), extra_data_names=(), her_k=4):
+        super().__init__(size)
         self._maxsize = self._maxsize // episode_length
-        self._scan_length = scan_length
-        #self._optim_length = optim_length # TODO: optim length
+        self.her_k = her_k
+        self.scan_length = scan_length
+        self._extra_data_names = extra_data_names
+        self._rnn_inputs = rnn_inputs
+        self._data_idxs = {"obs": 0, "action": 1, "reward": 2, "obs_tp1": 3, "done": 4,
+                           **{name: 5 + i for i, name in enumerate(self._extra_data_names)}}
+        self._rnn_data_idxs = [self._data_idxs[name] for name in self._rnn_inputs]
+        self._current_episode_data = []
 
-    def add(self, obs_t, action, reward, obs_tp1, done):
-        data = (obs_t, action, reward, obs_tp1, done)
+    def add(self, obs_t, action, reward, obs_tp1, done, *extra_data):
+        if self.her_k > 0:
+            obs_t = [obs_t]
+            obs_tp1 = [obs_tp1]
+            reward = [reward]
+        data = (obs_t, action, reward, obs_tp1, done, *extra_data)
         self._current_episode_data.append(data)
         if done:
             if self._next_idx >= len(self._storage):
@@ -118,127 +128,170 @@ class RecurrentReplayBuffer(ReplayBuffer):
             self._next_idx = (self._next_idx + 1) % self._maxsize
             self._current_episode_data = []
 
-    def __len__(self):
-        return sum([len(episode) for episode in self._storage])
+    def add_her(self, obs, obs_tp1, reward, timestep, ep_index=None):
+        assert self.her_k > 0
+        if ep_index is not None:
+            episode_data = self._storage[ep_index]
+        else:
+            episode_data = self._current_episode_data
+        episode_data[timestep][0].append(obs)
+        episode_data[timestep][2].append(reward)
+        episode_data[timestep][3].append(obs_tp1)
 
     def sample(self, batch_size, **_kwargs):
-        num_episodes = len(self._storage)
-        if num_episodes >= batch_size:
-            ep_idxes = random.sample(range(num_episodes), k=batch_size)
+        if self.her_k > 0:
+            num_episodes = len(self._storage)
+            if num_episodes >= batch_size:
+                ep_idxes = random.sample(range(num_episodes), k=batch_size)
+            else:
+                ep_idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]
+            ep_ts = [random.randint(self.scan_length * (1 + self.her_k), (len(self._storage[ep_i]) - 1) * (1 + self.her_k)) for ep_i in ep_idxes]  # - self._optim_length)
+            return self._encode_sample(ep_idxes, ep_ts)
         else:
-            ep_idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]
-        ep_ts = [random.randint(0, len(self._storage[ep_i])) for ep_i in ep_idxes]  # - self._optim_length)
-        return self._encode_sample(ep_idxes, ep_ts)
+            return super().sample(batch_size)
 
     def _encode_sample(self, ep_idxes, ep_ts):
-        obses_t, actions, rewards, obses_tp1, dones, hists = [], [], [], [], [], []
-        for i in ep_idxes:
-            ep_data = self._storage[i]
-            obs_t, action, reward, obs_tp1, done = ep_data[ep_ts[i]]
-            ep_scan_start = ep_ts[i] - self._scan_length if ep_ts[i] - self._scan_length >= 0 else 0
-            hist = [ep_data_h[0] for ep_data_h in ep_data[ep_scan_start:ep_ts[i]]]
+        obses_t, actions, rewards, obses_tp1, dones = [], [], [], [], []
+        extra_data_not_rnn = [name for name in self._extra_data_names if name not in self._rnn_inputs]
+        extra_data_not_rnn_idxs = [self._data_idxs[name] for name in extra_data_not_rnn]
+        extra_data = [[] for i in range(len(extra_data_not_rnn))]
+        hists = [[] for i in range(len(self._rnn_inputs))]
+
+        for i, ep_i in enumerate(ep_idxes):
+            if self.her_k > 0:
+                ep_t = int(ep_ts[i] / (self.her_k + 1))
+            else:
+                ep_t = ep_ts[i]
+            ep_data = self._storage[ep_i]
+            obs_t, action, reward, obs_tp1, done, *extra_timestep_data = ep_data[ep_t]
+            if self.her_k > 0:
+                her_idx = ep_ts[i] - ep_t * (self.her_k + 1)
+                obs_t, obs_tp1, reward = obs_t[her_idx], obs_tp1[her_idx], reward[her_idx]
+            if self.scan_length > 0:
+                ep_scan_start = ep_t - self.scan_length if ep_t - self.scan_length >= 0 else 0
+                ep_hists = [[] for i in range(len(self._rnn_inputs))]
+                for hist_i in range(ep_scan_start, ep_t + 1):
+                    for input_i, data_idx in enumerate(self._rnn_data_idxs):
+                        hist_data = ep_data[hist_i][data_idx]
+                        if self.her_k > 0 and data_idx in [0, 2, 3]:
+                            hist_data = hist_data[ep_ts[i] - ep_t * (self.her_k + 1)]
+                        ep_hists[input_i].append(np.array(hist_data))
+            else:
+                ep_hists = [[ep_data[data_idx]] for data_idx in self._rnn_data_idxs]
             obses_t.append(np.array(obs_t, copy=False))
             actions.append(np.array(action, copy=False))
             rewards.append(reward)
             obses_tp1.append(np.array(obs_tp1, copy=False))
             dones.append(done)
-            hists.append(np.array(hist, copy=False))
-        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), hists
+            for hist_i in range(len(hists)):
+                hists[hist_i].extend(ep_hists[hist_i])
+            for j, data_i in enumerate(extra_data_not_rnn_idxs):
+                if np.ndim(extra_timestep_data[j]) == 0:
+                    extra_data[j].append(extra_timestep_data[data_i - 5])
+                else:
+                    extra_data[j].append(np.array(extra_timestep_data[data_i - 5], copy=False))
+
+        extra_data_dict = {name: np.array(extra_data[i]) for i, name in enumerate(extra_data_not_rnn)}
+        batch_resets = np.zeros(shape=(len(ep_idxes) * (self.scan_length + 1)), dtype=np.bool)
+        batch_resets[::self.scan_length] = 1
+        extra_data_dict["reset"] = batch_resets
+        res = [np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones),
+            extra_data_dict]
+        for i, name in enumerate(self._rnn_inputs):
+            rnn_input_idx = self._rnn_data_idxs[i]
+            if rnn_input_idx < 5:
+                res[rnn_input_idx] = np.array(hists[i])
+            else:
+                res[-1][name] = np.array(hists[i])
 
 
+        return res
+
+    def __len__(self):
+        return sum([max(0, len(ep) - self.scan_length) for ep in self._storage])
+
+
+# TODO: maybe add support for episode constant data
 class EpisodicRecurrentReplayBuffer(ReplayBuffer):
     __name__ = "EpisodicRecurrentReplayBuffer"
 
-    def __init__(self, size, episode_length):
-        super(EpisodicRecurrentReplayBuffer, self).__init__(size // episode_length)
-        self._episode_my = []
+    def __init__(self, size, episode_length, sample_consecutive_max=-1, extra_data_names=()):
+        super().__init__(size // episode_length)
         self._current_episode_data = []
+        #self._episode_data = []  # Data which is constant within episode
+        self._extra_data_names = extra_data_names
+        self._sample_consecutive_max = sample_consecutive_max
 
-    def add(self, obs_t, action, reward, obs_tp1, done, goal, my=None):
-        assert not (done and my is None)
-        self._current_episode_data.append((obs_t, action, reward, obs_tp1, done, goal))
+    def add(self, obs_t, action, reward, obs_tp1, done, *extra_data):
+        self._current_episode_data.append((obs_t, action, reward, obs_tp1, done, *extra_data))
 
         if done:
-            self.store_episode(my)
+            self.store_episode()
 
-    def store_episode(self, my):
+    def store_episode(self):
         if len(self._current_episode_data) == 0:
             return
 
         if self._next_idx >= len(self._storage):
             self._storage.append(self._current_episode_data)
-            self._episode_my.append(my)
         else:
             self._storage[self._next_idx] = self._current_episode_data
-            self._episode_my[self._next_idx] = my
         self._next_idx = (self._next_idx + 1) % self._maxsize
         self._current_episode_data = []
 
-    def _encode_sample(self, idxes):
-        obses_t, actions, rewards, obses_tp1, dones, goals, a_prevs, mys = [], [], [], [], [], [], [], []
-        for i in idxes:
-            ep_data = self._storage[i]
-            for j, timestep in enumerate(ep_data):
-                obs_t, action, reward, obs_tp1, done, goal = timestep
-                obses_t.append(np.array(obs_t, copy=False))
-                actions.append(np.array(action, copy=False))
-                rewards.append(reward)
-                obses_tp1.append(np.array(obs_tp1, copy=False))
-                dones.append(done)
-                goals.append(np.array(goal, copy=False))
-                if j == 0:
-                    a_prevs.append(np.zeros_like(ep_data[0][1]))
-                else:
-                    a_prevs.append(np.array(ep_data[j - 1][1], copy=False))
-                mys.append(np.array(self._episode_my[i], copy=False))
-        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), np.array(goals), np.array(a_prevs), np.array(mys)
-
-    def sample(self, batch_size, sample_max_len=-1):
+    def sample(self, batch_size, sample_consecutive_max=None):
+        if sample_consecutive_max is None:
+            sample_consecutive_max = self._sample_consecutive_max
         samples_left = batch_size
-        obses_t, actions, rewards, obses_tp1, dones, goals, a_prevs, resets, mys = [], [], [], [], [], [], [], [], []
+        obses_t, actions, rewards, obses_tp1, dones, resets = [], [], [], [], [], []
+        extra_data = [[] for i in range(len(self._extra_data_names))]
         while samples_left > 0:
             ep_idx = np.random.randint(0, len(self._storage) - 1)
             ep_data = self._storage[ep_idx]
-            if sample_max_len != -1:
-                ep_data = ep_data[np.random.randint(0, len(ep_data) - sample_max_len):]
+            if sample_consecutive_max != -1:
+                ep_start_idx = np.random.randint(0, max(len(ep_data) - sample_consecutive_max + 1, 1))
+                ep_data = ep_data[ep_start_idx:ep_start_idx + sample_consecutive_max]
             if len(ep_data) > samples_left:
                 ep_data = ep_data[:samples_left]
 
             for j, timestep in enumerate(ep_data):
-                obs_t, action, reward, obs_tp1, done, goal = timestep
+                obs_t, action, reward, obs_tp1, done, *extra_timestep_data = timestep
                 obses_t.append(np.array(obs_t, copy=False))
                 actions.append(np.array(action, copy=False))
                 rewards.append(reward)
                 obses_tp1.append(np.array(obs_tp1, copy=False))
                 dones.append(done)
-                goals.append(np.array(goal, copy=False))
-                if j == 0:
-                    a_prevs.append(np.zeros_like(ep_data[0][1]))
-                    resets.append(True)
-                else:
-                    resets.append(False)
-                    a_prevs.append(np.array(ep_data[j - 1][1], copy=False))
-                mys.append(np.array(self._episode_my[ep_idx], copy=False))
+                resets.append(True if j == 0 else False)
+                for data_i, data in enumerate(extra_timestep_data):
+                    if np.ndim(data) == 0:
+                        extra_data[data_i].append(data)
+                    else:
+                        extra_data[data_i].append(np.array(data, copy=False))
 
             samples_left -= len(ep_data)
 
             assert samples_left >= 0
 
-            # TODO: rnn reset same as done?
+        extra_data_dict = {name: np.array(extra_data[i]) for i, name in enumerate(self._extra_data_names)}
+        extra_data_dict["reset"] = np.array(resets)
 
-        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), {"goal": np.array(goals), "action_prev": np.array(a_prevs), "reset": np.array(resets), "my": np.array(mys)}
+        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), extra_data_dict
 
     def __len__(self):
-        return sum([len(episode) for episode in self._storage])
+        if len(self.storage) > 1:
+            return sum([len(episode) for episode in self._storage])
+        else:
+            return 0
 
 
-
-class DRRecurrentReplayBuffer(RecurrentReplayBuffer):
+class DRRecurrentReplayBuffer(ReplayBuffer):
     __name__ = "DRRecurrentReplayBuffer"
 
-    def __init__(self, size, episode_length, scan_length, her_k=4):
+    def __init__(self, size, episode_max_len, scan_length, her_k=4):
         self.her_k = her_k
-        super(DRRecurrentReplayBuffer, self).__init__(size, episode_length, scan_length)
+        super().__init__(size)
+        self._scan_length = scan_length
+        self._maxsize = self._maxsize // episode_max_len
         self._episode_my = []
 
     def add(self, obs_t, action, reward, obs_tp1, done, goal, my=None):
