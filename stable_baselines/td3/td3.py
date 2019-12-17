@@ -439,6 +439,10 @@ class TD3(OffPolicyRLModel):
         if replay_wrapper is not None:
             self.replay_buffer = replay_wrapper(self.replay_buffer)
 
+        if isinstance(self.train_freq, tuple):  # TODO: bug with optuna please FIX
+            self.train_freq = self.train_freq[0]
+            self.gradient_steps = self.gradient_steps[0]
+
         with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
                 as writer:
 
