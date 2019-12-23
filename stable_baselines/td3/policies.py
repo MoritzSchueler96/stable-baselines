@@ -245,9 +245,7 @@ class RecurrentPolicy(TD3Policy):
 
     def make_actor(self, ff_phs=None, rnn_phs=None, dones=None, reuse=False, scope="pi"):
         lstm_branch = tf.concat([tf.layers.flatten(ph) for ph in rnn_phs], axis=-1)
-        if self.layers["ff"] is None:
-            assert ff_phs is None
-        else:
+        if ff_phs is not None:
             ff_branch = tf.concat([tf.layers.flatten(ph) for ph in ff_phs], axis=-1)
 
         if dones is None:
@@ -285,7 +283,7 @@ class RecurrentPolicy(TD3Policy):
                     lstm_branch = [lstm_branch[-1]]
                 lstm_branch = seq_to_batch(lstm_branch)
 
-            if self.layers["ff"] is not None:
+            if ff_phs is not None:
                 head = tf.concat([ff_branch, lstm_branch], axis=-1)
             else:
                 head = lstm_branch
@@ -300,9 +298,7 @@ class RecurrentPolicy(TD3Policy):
 
     def make_critics(self, ff_phs=None, rnn_phs=None, dones=None, reuse=False, scope="values_fn"):
         lstm_branch_in = tf.concat([tf.layers.flatten(ph) for ph in rnn_phs], axis=-1)
-        if self.layers["ff"] is None:
-            assert ff_phs is None
-        else:
+        if ff_phs is not None:
             ff_branch_in = tf.concat([tf.layers.flatten(ph) for ph in ff_phs], axis=-1)
 
         if dones is None:
@@ -334,6 +330,8 @@ class RecurrentPolicy(TD3Policy):
                         ff_branch = ff_branch_in
                         for i, fc_layer_units in enumerate(self.layers["ff"]):
                             ff_branch = self.activ_fn(tf.layers.dense(ff_branch, fc_layer_units, name="ff_fc{}".format(i)))
+                    elif ff_phs is not None:
+                        ff_branch = ff_branch_in
 
                     if not self.share_lstm:
                         for i, fc_layer_units in enumerate(self.layers["lstm"]):
@@ -348,7 +346,7 @@ class RecurrentPolicy(TD3Policy):
                     if self.n_steps > 1:
                         lstm_branch = [lstm_branch[-1]]
                     lstm_branch = seq_to_batch(lstm_branch)
-                    if self.layers["ff"] is not None:
+                    if ff_phs is not None:
                         head = tf.concat([ff_branch, lstm_branch], axis=-1)
                     else:
                         head = lstm_branch
