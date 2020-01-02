@@ -749,7 +749,8 @@ class TD3(OffPolicyRLModel):
             "_vectorize_action": self._vectorize_action,
             "policy_kwargs": self.policy_kwargs,
             "num_timesteps": self.num_timesteps,
-            "buffer_type": self.buffer_type
+            "buffer_type": self.buffer_type,
+            "buffer_kwargs": self.buffer_kwargs
         }
 
         params_to_save = self.get_parameters()
