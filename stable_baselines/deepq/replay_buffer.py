@@ -289,7 +289,7 @@ class EpisodicRecurrentReplayBuffer(ReplayBuffer):
         super().__init__(size // episode_length)
         self._current_episode_data = []
         #self._episode_data = []  # Data which is constant within episode
-        self._extra_data_names = extra_data_names
+        self._extra_data_names = sorted(extra_data_names)
         self._sample_consecutive_max = sample_consecutive_max
 
     def add(self, obs_t, action, reward, obs_tp1, done, *extra_data):
