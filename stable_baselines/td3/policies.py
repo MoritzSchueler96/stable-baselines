@@ -475,7 +475,7 @@ class DRPolicy(RecurrentPolicy):
             data["action_prev_rnn"] = _locals["episode_data"][-1]["action"]
         if "my" not in _locals or _locals["ep_data"]:
             data["my"] = _locals["self"].env.get_env_parameters()
-        data["action_tp1_prev_rnn"] = _locals["action"]
+        data["target_action_prev_rnn"] = _locals["action"]
 
         return data
 
