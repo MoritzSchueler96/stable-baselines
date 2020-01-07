@@ -843,12 +843,12 @@ class TD3(OffPolicyRLModel):
         return env
 
     def _get_env_parameters(self):
-        return np.zeros((37,))
+        #return np.zeros((37,))
         if isinstance(self.env, HERGoalEnvWrapper):
             return self.env.env.get_simulator_parameters()
         else:
             return self.env.get_simulator_parameters()
-        
+
     def _set_prioritized_buffer(self):
         buffer_kw = {"size": self.buffer_size, "alpha": 0.7}
         if self.buffer_type.__name__ == "RankPrioritizedReplayBuffer":
