@@ -54,7 +54,7 @@ class HindsightExperienceReplayWrapper(object):
     """
     __name__ = "HindsightExperienceReplayWrapper"
 
-    def __init__(self, replay_buffer, n_sampled_goal, goal_selection_strategy, wrapped_env, her_starts=None, require_change=True):
+    def __init__(self, replay_buffer, n_sampled_goal, goal_selection_strategy, wrapped_env, her_starts=None, require_change=False):
         super(HindsightExperienceReplayWrapper, self).__init__()
 
         assert isinstance(goal_selection_strategy, GoalSelectionStrategy), "Invalid goal selection strategy," \
