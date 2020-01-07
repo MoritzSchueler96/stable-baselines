@@ -245,16 +245,6 @@ class TD3(OffPolicyRLModel):
                         self.expert_actions_ph = tf.placeholder(tf.float32, shape=(None,) + self.action_space.shape,
                                                             name="expert_actions")
 
-                    if self.recurrent_policy:
-                        self.goal_ph = self.policy_tf.goal_ph
-                        self.action_prev_ph = self.policy_tf.action_prev_ph
-                        self.pi_state_ph = self.policy_tf.pi_state_ph
-                        self.qf1_state_ph = self.policy_tf.qf1_state_ph
-                        self.qf2_state_ph = self.policy_tf.qf2_state_ph
-                        self.my_ph = self.policy_tf.my_ph
-                        self.dones_ph = self.policy_tf.dones_ph
-                        self.obs_rnn_ph = self.policy_tf.obs_rnn_ph
-
                 self.buffer_is_prioritized = self.buffer_type.__name__ in ["PrioritizedReplayBuffer",
                                                                            "RankPrioritizedReplayBuffer"]
 
@@ -277,24 +267,25 @@ class TD3(OffPolicyRLModel):
                 with tf.variable_scope("model", reuse=False):
                     # Create the policy
                     if self.recurrent_policy:
-                        actor_args = inspect.signature(self.policy_tf.make_actor).parameters
-                        critic_args = inspect.signature(self.policy_tf.make_critics).parameters
-                        actor_kws = {k: v for k, v in self.train_extra_phs.items() if k in actor_args}
-                        critic_kws = {k: v for k, v in self.train_extra_phs.items() if k in critic_args}
-                        self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph, **actor_kws)
-                        self.policy_act = policy_act = self.policy_tf_act.make_actor(reuse=True)
+                        if self.pretrain_expert:
+                            self.policy_out = policy_out = self.expert_actions_ph
+                        else:
+                            actor_args = inspect.signature(self.policy_tf.make_actor).parameters
+                            actor_kws = {k: v for k, v in self.train_extra_phs.items() if k in actor_args}
+                            self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph, **actor_kws)
+                            self.policy_act = policy_act = self.policy_tf_act.make_actor(reuse=True)
                         # Use two Q-functions to improve performance by reducing overestimation bias
+                        critic_args = inspect.signature(self.policy_tf.make_critics).parameters
+                        critic_kws = {k: v for k, v in self.train_extra_phs.items() if k in critic_args}
                         qf1, qf2 = self.policy_tf.make_critics(self.processed_obs_ph, self.actions_ph, **critic_kws)
                         # Q value when following the current policy
                         qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph, policy_out, **critic_kws,
                                                                      reuse=True)
 
-
                         if self.expert is not None:
                             qf1_expert, qf2_expert = self.policy_tf.make_critics(self.processed_obs_ph,
-                                                                                 self.expert_actions_ph, self.goal_ph,
-                                                                                 self.my_ph, self.obs_rnn_ph,
-                                                                                 self.action_prev_ph, reuse=True)
+                                                                                 self.expert_actions_ph, **critic_kws,
+                                                                                 reuse=True)
                     else:
                         if self.pretrain_expert:
                             self.policy_out = policy_out = self.expert_actions_ph
@@ -328,43 +319,37 @@ class TD3(OffPolicyRLModel):
                         qf1_expert, qf2_expert = self.policy_tf.make_critics(self.processed_obs_ph,
                                                                      self.expert_actions_ph, reuse=True)
 
-
                 with tf.variable_scope("target", reuse=False):
-                    if self.recurrent_policy:
-                        # Create target networks
-                        target_policy_out = self.target_policy_tf.make_actor(self.processed_next_obs_ph,
-                                                                             **actor_kws,
-                                                                             dones=self.dones_ph)
-                        # Target policy smoothing, by adding clipped noise to target actions
-                        target_noise = tf.random_normal(tf.shape(target_policy_out), stddev=self.target_policy_noise)
+                    # Create target networks
+                    if self.pretrain_expert:
+                        target_policy_out = policy_out
+                    else:
+                        if self.recurrent_policy:
+                            target_policy_out = self.target_policy_tf.make_actor(self.processed_next_obs_ph,
+                                                                                 **actor_kws,
+                                                                                 dones=self.dones_ph)
+                        else:
+                            target_policy_out = self.target_policy_tf.make_actor(self.processed_next_obs_ph)
+                    # Target policy smoothing, by adding clipped noise to target actions
+                    if self.target_policy_noise > 0:
+                        if self.q_filter_scale_noise:
+                            target_noise = tf.random_normal(tf.shape(target_policy_out), stddev=self.target_policy_noise * self.q_filter_activation_ph)
+                        else:
+                            target_noise = tf.random_normal(tf.shape(target_policy_out), stddev=self.target_policy_noise)
                         target_noise = tf.clip_by_value(target_noise, -self.target_noise_clip, self.target_noise_clip)
                         # Clip the noisy action to remain in the bounds [-1, 1] (output of a tanh)
                         noisy_target_action = tf.clip_by_value(target_policy_out + target_noise, -1, 1)
-                        # Q values when following the target policy
+                    else:
+                        noisy_target_action = target_policy_out
+                    # Q values when following the target policy
+                    if self.recurrent_policy:
                         qf1_target, qf2_target = self.target_policy_tf.make_critics(self.processed_next_obs_ph,
                                                                                     noisy_target_action,
                                                                                     dones=self.dones_ph,
                                                                                     **critic_kws)
                     else:
-                        # Create target networks
-                        if self.pretrain_expert:
-                            target_policy_out = policy_out
-                        else:
-                            target_policy_out = self.target_policy_tf.make_actor(self.processed_next_obs_ph)
-                        # Target policy smoothing, by adding clipped noise to target actions
-                        if self.target_policy_noise > 0:
-                            if self.q_filter_scale_noise:
-                                target_noise = tf.random_normal(tf.shape(target_policy_out), stddev=self.target_policy_noise * self.q_filter_activation_ph)
-                            else:
-                                target_noise = tf.random_normal(tf.shape(target_policy_out), stddev=self.target_policy_noise)
-                            target_noise = tf.clip_by_value(target_noise, -self.target_noise_clip, self.target_noise_clip)
-                            # Clip the noisy action to remain in the bounds [-1, 1] (output of a tanh)
-                            noisy_target_action = tf.clip_by_value(target_policy_out + target_noise, -1, 1)
-                        else:
-                            noisy_target_action = target_policy_out
-                        # Q values when following the target policy
                         qf1_target, qf2_target = self.target_policy_tf.make_critics(self.processed_next_obs_ph,
-                                                                                    noisy_target_action)
+                                                                                noisy_target_action)
 
                 if self.pretrain_expert is not None:
                     policy_pre_activation = policy_out
