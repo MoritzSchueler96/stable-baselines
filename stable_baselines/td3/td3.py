@@ -636,7 +636,7 @@ class TD3(OffPolicyRLModel):
                         original_obs = self.env.get_original_obs()
                     else:
                         original_obs = obs
-                    expert_action = self.expert(original_obs[None]).flatten()
+                    expert_action = self.expert(original_obs[None], done=np.array(done)[None]).flatten()
                 if (self.num_timesteps < self.learning_starts
                         or np.random.rand() < self.random_exploration):
                     # No need to rescale when sampling random action
