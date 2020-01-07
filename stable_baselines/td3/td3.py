@@ -746,8 +746,7 @@ class TD3(OffPolicyRLModel):
                         # this is controlled by the `policy_delay` parameter
                         step_writer = writer if grad_step % self.write_freq == 0 else None
                         mb_infos_vals.append(
-                            self._train_step(step, step_writer, current_lr, (step + grad_step) % self.policy_delay == 0
-                        ,grad_step == 0))
+                            self._train_step(step, step_writer, current_lr, (step + grad_step) % self.policy_delay == 0))
 
                     # Log losses and entropy, useful for monitor training
                     if len(mb_infos_vals) > 0:
