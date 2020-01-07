@@ -262,6 +262,9 @@ class TD3(OffPolicyRLModel):
                         replay_buffer_kw = {"size": self.buffer_size, **self.buffer_kwargs}
                         if self.recurrent_policy:
                             replay_buffer_kw["extra_data_names"] = self.policy_tf.extra_data_names
+                            if self.expert is not None and not self.pretrain_expert:
+                                replay_buffer_kw["extra_data_names"].append("expert_actions")
+                                self.train_extra_phs["expert_actions"] = self.expert_actions_ph
                         self.replay_buffer = self.buffer_type(**replay_buffer_kw)
 
                 with tf.variable_scope("model", reuse=False):
@@ -521,7 +524,7 @@ class TD3(OffPolicyRLModel):
             if self.pretrain_expert:
                 feed_dict[self.expert_actions_ph] = batch_actions
             else:
-                feed_dict[self.expert_actions_ph] = batch_expert_actions
+                #feed_dict[self.expert_actions_ph] = batch_expert_actions
                 feed_dict[self.expert_scale_ph] = self.expert_scale(self.num_timesteps)
                 if self.expert_q_filter is not None:
                     if self.q_filter_scale_noise:
@@ -642,18 +645,24 @@ class TD3(OffPolicyRLModel):
                     # No need to rescale when sampling random action
                     rescaled_action = action = self.env.action_space.sample()
                 else:
-                    if self.recurrent_policy:
-                        action, self.pi_state = self.policy_tf_act.step(obs[None], state=self.pi_state, mask=np.array(done)[None])
-                        action = action.flatten()
-                    else:
-                        if self.pretrain_expert or self.exploration == "expert":
-                            action = expert_action
-                        elif self.exploration == "q-filter":
-                            agent_score, expert_score = self.sess.run([self.qf1_pi, self.qf1_expert], {self.observations_ph: obs[None], self.expert_actions_ph: action[None]})
-                            if agent_score >= expert_score:
-                                action = self.policy_tf.step(obs[None]).flatten()
+                    if self.pretrain_expert or self.exploration == "expert":
+                        action = expert_action
+                    elif self.exploration == "q-filter":
+                        agent_score, expert_score = self.sess.run([self.qf1_pi, self.qf1_expert], {self.observations_ph: obs[None], self.expert_actions_ph: action[None]})
+                        if agent_score >= expert_score:
+                            if self.recurrent_policy:
+                                action, self.pi_state = self.policy_tf_act.step(obs[None], state=self.pi_state,
+                                                                                mask=np.array(done)[None])
+                                action = action.flatten()
                             else:
-                                action = expert_action
+                                action = self.policy_tf.step(obs[None]).flatten()
+                        else:
+                            action = expert_action
+                    else:
+                        if self.recurrent_policy:
+                            action, self.pi_state = self.policy_tf_act.step(obs[None], state=self.pi_state,
+                                                                            mask=np.array(done)[None])
+                            action = action.flatten()
                         else:
                             action = self.policy_tf.step(obs[None]).flatten()
                     # Add noise to the action, as the policy
