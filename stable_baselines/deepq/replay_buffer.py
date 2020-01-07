@@ -61,6 +61,7 @@ class ReplayBuffer(object):
         :param reward: (float) the reward of the transition
         :param obs_tp1: (Any) the current observation
         :param done: (bool) is the episode done
+        :param bootstrap (bool or None) should the terminal signal be set to true
         """
         if bootstrap is None:
             bootstrap = not done
@@ -165,7 +166,6 @@ class ExpertReplayBuffer(ReplayBuffer):
         for i in idxes:
             expert_actions.append(np.array(self._expert_actions[i], copy=False))
         return samples, expert_actions
-
 
 
 # TODO: lots of work to do on this one
@@ -274,7 +274,6 @@ class RecurrentReplayBuffer(ReplayBuffer):
                 res[rnn_input_idx] = np.array(hists[i])
             else:
                 res[-1][name] = np.array(hists[i])
-
 
         return res
 
