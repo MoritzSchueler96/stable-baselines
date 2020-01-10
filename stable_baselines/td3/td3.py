@@ -14,7 +14,7 @@ from stable_baselines.common.vec_env import VecEnv
 from stable_baselines.deepq.replay_buffer import ReplayBuffer, DiscrepancyReplayBuffer, StableReplayBuffer, PrioritizedReplayBuffer, DRRecurrentReplayBuffer
 from stable_baselines.ppo2.ppo2 import safe_mean, get_schedule_fn
 from stable_baselines.sac.sac import get_vars
-from stable_baselines.td3.policies import TD3Policy, RecurrentPolicy
+from stable_baselines.td3.policies import TD3Policy, RecurrentPolicy, DRPolicy
 from stable_baselines import logger
 from stable_baselines.common.schedules import ExponentialSchedule
 
@@ -58,13 +58,13 @@ class TD3(OffPolicyRLModel):
     """
 
     def __init__(self, policy, env, gamma=0.99, learning_rate=3e-4, buffer_size=50000,
-                 buffer_type=ReplayBuffer, prioritization_starts=0, beta_schedule=None,
+                 buffer_type=ReplayBuffer, buffer_kwargs=None, prioritization_starts=0, beta_schedule=None,
                  learning_starts=100, train_freq=100, gradient_steps=100, batch_size=128,
                  tau=0.005, policy_delay=2, action_noise=None, action_l2_scale=0,
                  target_policy_noise=0.2, target_noise_clip=0.5,
                  random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, time_aware=False,
-                 recurrent_scan_length=0):
+                 reward_transformation=None, ):
 
         super(TD3, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=TD3Policy, requires_vec_env=False, policy_kwargs=policy_kwargs)
@@ -75,6 +75,7 @@ class TD3(OffPolicyRLModel):
         self.loss_history = None
         self.buffer_type = buffer_type
         self.buffer_size = buffer_size
+        self.buffer_kwargs = buffer_kwargs
         self.learning_rate = learning_rate
         self.learning_starts = learning_starts
         self.train_freq = train_freq
@@ -90,7 +91,8 @@ class TD3(OffPolicyRLModel):
         self.target_policy_noise = target_policy_noise
 
         self.time_aware = time_aware
-        self.recurrent_scan_length = recurrent_scan_length
+
+        self.reward_transformation = reward_transformation
 
         self.graph = None
         self.replay_buffer = None
@@ -127,9 +129,6 @@ class TD3(OffPolicyRLModel):
         if self.recurrent_policy:
             self.policy_tf_act = None
             self.policy_act = None
-            self.goal_ph = None
-            self.action_prev_ph = None
-            self.my_ph = None
             self.pi_state_ph = None
             self.qf1_state_ph = None
             self.qf2_state_ph = None
@@ -137,6 +136,9 @@ class TD3(OffPolicyRLModel):
             self.qf1_state = None
             self.qf2_state = None
             self.act_ops = None
+            self.dones_ph = None
+
+        self.train_extra_phs = {}
 
         self.active_sampling = False
 
@@ -158,43 +160,43 @@ class TD3(OffPolicyRLModel):
                     n_cpu //= 2
                 self.sess = tf_util.make_session(num_cpu=n_cpu, graph=self.graph)
 
-                self.buffer_is_prioritized = self.buffer_type.__name__ in ["PrioritizedReplayBuffer", "RankPrioritizedReplayBuffer"]
-
-                if self.replay_buffer is None:
-                    if self.buffer_is_prioritized:
-                        if self.num_timesteps is not None and self.prioritization_starts > self.num_timesteps or self.prioritization_starts > 0:
-                            self.replay_buffer = ReplayBuffer(self.buffer_size)
-                        else:
-                            buffer_kw = {"size": self.buffer_size, "alpha": 0.7}
-                            if self.buffer_type.__name__ == "RankPrioritizedReplayBuffer":
-                                buffer_kw.update({"learning_starts": self.prioritization_starts, "batch_size": self.batch_size})
-                            self.replay_buffer = self.buffer_type(**buffer_kw)
-                    else:
-                        replay_buffer_kw = {"size": self.buffer_size}
-                        if self.recurrent_policy:
-                            replay_buffer_kw["scan_length"] = self.recurrent_scan_length
-                            replay_buffer_kw["episode_max_len"] = 300
-                        self.replay_buffer = self.buffer_type(**replay_buffer_kw)
-
                 #self.replay_buffer = DiscrepancyReplayBuffer(self.buffer_size, scorer=self.policy_tf.get_q_discrepancy)
 
                 with tf.variable_scope("input", reuse=False):
                     # Create policy and target TF objects
                     if self.recurrent_policy:
-                        my_size = len(self._get_env_parameters())
-                        goal_size = self.env.goal_dim
+                        import inspect
+                        policy_tf_args = inspect.signature(self.policy).parameters
+
+                        policy_tf_kwargs = {}
+                        if "my_size" in policy_tf_args:
+                            policy_tf_kwargs["my_size"] = len(self._get_env_parameters())
+                        if "goal_size" in policy_tf_args:
+                            policy_tf_kwargs["goal_size"] = self.env.goal_dim
+
+                        scan_length = self.buffer_kwargs.get("scan_length", 0)
+
                         self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
-                                                     goal_size=goal_size, my_size=my_size,
-                                                     n_batch=self.batch_size, n_steps=self.recurrent_scan_length + 1
-                                                     , **self.policy_kwargs)
+                                                     n_batch=self.batch_size, n_steps=scan_length + 1,
+                                                     **policy_tf_kwargs, **self.policy_kwargs)
                         self.policy_tf_act = self.policy(self.sess, self.observation_space, self.action_space,
-                                                         goal_size=goal_size, my_size=my_size, n_batch=1,
+                                                         n_batch=1, **policy_tf_kwargs,
                                                          **self.policy_kwargs)
                         self.target_policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
-                                                            goal_size=goal_size, my_size=my_size,
                                                             n_batch=self.batch_size,
-                                                            n_steps=self.recurrent_scan_length + 1,
+                                                            n_steps=scan_length + 1, **policy_tf_kwargs,
                                                             **self.policy_kwargs)
+
+                        for ph_name in self.policy_tf.extra_phs:
+                            if "target_" in ph_name:
+                                self.train_extra_phs[ph_name] = getattr(self.target_policy_tf, ph_name.replace("target_", "") + "_ph")
+                            else:
+                                self.train_extra_phs[ph_name] = getattr(self.policy_tf, ph_name + "_ph")
+
+                        self.pi_state_ph = self.policy_tf.pi_state_ph
+                        self.qf1_state_ph = self.policy_tf.qf1_state_ph
+                        self.qf2_state_ph = self.policy_tf.qf2_state_ph
+                        self.dones_ph = self.policy_tf.dones_ph
                     else:
                         self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
                                                      **self.policy_kwargs)
@@ -214,28 +216,38 @@ class TD3(OffPolicyRLModel):
                                                      name='actions')
                     self.learning_rate_ph = tf.placeholder(tf.float32, [], name="learning_rate_ph")
 
-                    if self.recurrent_policy:
-                        self.goal_ph = self.policy_tf.goal_ph
-                        self.action_prev_ph = self.policy_tf.action_prev_ph
-                        self.pi_state_ph = self.policy_tf.pi_state_ph
-                        self.qf1_state_ph = self.policy_tf.qf1_state_ph
-                        self.qf2_state_ph = self.policy_tf.qf2_state_ph
-                        self.my_ph = self.policy_tf.my_ph
-                        self.dones_ph = self.policy_tf.dones_ph
-                        self.obs_rnn_ph = self.policy_tf.obs_rnn_ph
+                self.buffer_is_prioritized = self.buffer_type.__name__ in ["PrioritizedReplayBuffer",
+                                                                           "RankPrioritizedReplayBuffer"]
+
+                if self.replay_buffer is None:
+                    if self.buffer_is_prioritized:
+                        if self.num_timesteps is not None and self.prioritization_starts > self.num_timesteps or self.prioritization_starts > 0:
+                            self.replay_buffer = ReplayBuffer(self.buffer_size)
+                        else:
+                            buffer_kw = {"size": self.buffer_size, "alpha": 0.7}
+                            if self.buffer_type.__name__ == "RankPrioritizedReplayBuffer":
+                                buffer_kw.update(
+                                    {"learning_starts": self.prioritization_starts, "batch_size": self.batch_size})
+                            self.replay_buffer = self.buffer_type(**buffer_kw)
+                    else:
+                        replay_buffer_kw = {"size": self.buffer_size, **self.buffer_kwargs}
+                        if self.recurrent_policy:
+                            replay_buffer_kw["extra_data_names"] = self.policy_tf.extra_data_names
+                        self.replay_buffer = self.buffer_type(**replay_buffer_kw)
 
                 with tf.variable_scope("model", reuse=False):
                     # Create the policy
                     if self.recurrent_policy:
-                        self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph, self.goal_ph,
-                                                                                 self.obs_rnn_ph, self.action_prev_ph)
+                        actor_args = inspect.signature(self.policy_tf.make_actor).parameters
+                        critic_args = inspect.signature(self.policy_tf.make_critics).parameters
+                        actor_kws = {k: v for k, v in self.train_extra_phs.items() if k in actor_args}
+                        critic_kws = {k: v for k, v in self.train_extra_phs.items() if k in critic_args}
+                        self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph, **actor_kws)
                         self.policy_act = policy_act = self.policy_tf_act.make_actor(reuse=True)
                         # Use two Q-functions to improve performance by reducing overestimation bias
-                        qf1, qf2 = self.policy_tf.make_critics(self.processed_obs_ph, self.actions_ph, self.goal_ph,
-                                                               self.my_ph, self.obs_rnn_ph, self.action_prev_ph)
+                        qf1, qf2 = self.policy_tf.make_critics(self.processed_obs_ph, self.actions_ph, **critic_kws)
                         # Q value when following the current policy
-                        qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph, policy_out, self.goal_ph,
-                                                                     self.my_ph, self.obs_rnn_ph, self.action_prev_ph,
+                        qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph, policy_out, **critic_kws,
                                                                      reuse=True)
                     else:
                         self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph)
@@ -248,8 +260,8 @@ class TD3(OffPolicyRLModel):
                 with tf.variable_scope("target", reuse=False):
                     if self.recurrent_policy:
                         # Create target networks
-                        target_policy_out = self.target_policy_tf.make_actor(self.processed_next_obs_ph, self.goal_ph,
-                                                                             self.obs_rnn_ph, self.action_prev_ph,
+                        target_policy_out = self.target_policy_tf.make_actor(self.processed_next_obs_ph,
+                                                                             **actor_kws,
                                                                              dones=self.dones_ph)
                         # Target policy smoothing, by adding clipped noise to target actions
                         target_noise = tf.random_normal(tf.shape(target_policy_out), stddev=self.target_policy_noise)
@@ -259,10 +271,8 @@ class TD3(OffPolicyRLModel):
                         # Q values when following the target policy
                         qf1_target, qf2_target = self.target_policy_tf.make_critics(self.processed_next_obs_ph,
                                                                                     noisy_target_action,
-                                                                                    self.goal_ph, self.my_ph,
-                                                                                    self.obs_rnn_ph,
-                                                                                    self.action_prev_ph,
-                                                                                    dones=self.dones_ph)
+                                                                                    dones=self.dones_ph,
+                                                                                    **critic_kws)
                     else:
                         # Create target networks
                         target_policy_out = self.target_policy_tf.make_actor(self.processed_next_obs_ph)
@@ -290,18 +300,16 @@ class TD3(OffPolicyRLModel):
 
                     # Compute Q-Function loss
                     if self.buffer_is_prioritized:
-                        self.is_weights_ph = tf.placeholder(tf.float32, shape=(None, 1), name="is_weights")
+                        self.train_extra_phs["is_weights"] = tf.placeholder(tf.float32, shape=(None, 1), name="is_weights")
                         qf1_loss = tf.reduce_mean(self.is_weights_ph * (q_backup - qf1) ** 2)
                         qf2_loss = tf.reduce_mean(self.is_weights_ph * (q_backup - qf2) ** 2)
                     else:
                         qf1_loss = tf.reduce_mean((q_backup - qf1) ** 2)
                         qf2_loss = tf.reduce_mean((q_backup - qf2) ** 2)
 
-                    #q_discrepancy = tf.abs(qf1_pi - qf2_pi)
                     qvalues_losses = qf1_loss + qf2_loss
 
                     rew_loss = tf.reduce_mean(qf1_pi)
-                    #q_disc_loss = tf.reduce_mean(q_discrepancy)#self.q_disc_strength_ph * tf.reduce_mean(q_discrepancy)
                     action_loss = self.action_l2_scale * tf.nn.l2_loss(policy_pre_activation)
 
                     # Policy loss: maximise q value
@@ -311,12 +319,13 @@ class TD3(OffPolicyRLModel):
                     # will be called only every n training steps,
                     # where n is the policy delay
                     policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
-                    policy_train_op = policy_optimizer.minimize(policy_loss, var_list=get_vars('model/pi'))
+                    policy_vars = get_vars("model/pi") + get_vars("model/shared")
+                    policy_train_op = policy_optimizer.minimize(policy_loss, var_list=policy_vars)
                     self.policy_train_op = policy_train_op
 
                     # Q Values optimizer
                     qvalues_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
-                    qvalues_params = get_vars('model/values_fn/')
+                    qvalues_params = get_vars('model/values_fn/') + get_vars("model/shared/")
 
                     # Q Values and policy target params
                     source_params = get_vars("model/")
@@ -339,11 +348,10 @@ class TD3(OffPolicyRLModel):
                     self.infos_names = ['qf1_loss', 'qf2_loss']
                     # All ops to call during one training step
                     self.step_ops = [qf1_loss, qf2_loss,
-                                     qf1, qf2, train_values_op]#, q_discrepancy]
+                                     qf1, qf2, train_values_op]
 
                     # Monitor losses and entropy in tensorboard
                     tf.summary.scalar("rew_loss", rew_loss)
-                    #tf.summary.scalar("q_disc_loss", q_disc_loss)
                     tf.summary.scalar("action_loss", action_loss)
                     tf.summary.scalar('policy_loss', policy_loss)
                     tf.summary.scalar('qf1_loss', qf1_loss)
@@ -363,26 +371,12 @@ class TD3(OffPolicyRLModel):
 
     def _train_step(self, step, writer, learning_rate, update_policy):
         # Sample a batch from the replay buffer
-
+        sample_kw = {}
         if self.buffer_is_prioritized and self.num_timesteps >= self.prioritization_starts:
-            batch = self.replay_buffer.sample(self.batch_size, beta=self.beta_schedule(self.num_timesteps))
-            batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, batch_weights, batch_idxs = batch
-            if len(batch_weights.shape) == 1:
-                batch_weights = np.expand_dims(batch_weights, axis=1)
-        elif self.recurrent_policy:
-            batch = self.replay_buffer.sample(self.batch_size)
-            if self.buffer_type.__name__ == "DRRecurrentReplayBuffer":
-                batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, batch_goals, batch_hist_o, batch_hist_a, batch_mys \
-                 = batch
-            else:
-                batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, batch_goals, batch_action_prevs, batch_resets, batch_mys = batch
-                batch_hist_a = batch_action_prevs
-                batch_hist_o = batch_obs
-        else:
-            batch = self.replay_buffer.sample(self.batch_size)
-            batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
-            if self.buffer_is_prioritized:
-                batch_weights = np.ones(shape=(self.batch_size, 1))
+            sample_kw["beta"] = self.beta_schedule(self.num_timesteps)
+
+        batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, *batch_extra = self.replay_buffer.sample(self.batch_size, **sample_kw)
+        batch_extra = batch_extra[0]
 
         feed_dict = {
             self.observations_ph: batch_obs,
@@ -394,28 +388,17 @@ class TD3(OffPolicyRLModel):
         }
 
         if self.recurrent_policy:
-            # TODO: does this lose important gradient contributions?
-            self.pi_states = None
-            if self.buffer_type.__name__ == "DRRecurrentReplayBuffer":
-                batch_resets = np.zeros(shape=(self.batch_size * (self.recurrent_scan_length + 1),), dtype=np.bool)
-                batch_resets[::(self.recurrent_scan_length + 1)] = 1
-
             feed_dict.update({
-                self.my_ph: batch_mys,
-                self.goal_ph: batch_goals,
-                self.obs_rnn_ph: batch_hist_o,
-                self.action_prev_ph: batch_hist_a,
-                self.dones_ph: batch_resets,
+                self.dones_ph: batch_extra["reset"],
                 self.pi_state_ph: self.policy_tf.pi_initial_state,
                 self.qf1_state_ph: self.policy_tf.qf1_initial_state,
                 self.qf2_state_ph: self.policy_tf.qf2_initial_state,
                 self.target_policy_tf.pi_state_ph: self.target_policy_tf.pi_initial_state,
                 self.target_policy_tf.qf1_state_ph: self.target_policy_tf.qf1_initial_state,
-                self.target_policy_tf.qf2_state_ph: self.target_policy_tf.qf2_initial_state,
+                self.target_policy_tf.qf2_state_ph: self.target_policy_tf.qf2_initial_state
             })
 
-        if self.buffer_is_prioritized:
-            feed_dict[self.is_weights_ph] = batch_weights
+        feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items()})
 
         step_ops = self.step_ops
         if update_policy:
@@ -432,16 +415,9 @@ class TD3(OffPolicyRLModel):
             out = self.sess.run(step_ops, feed_dict)
 
         # Unpack to monitor losses
-        #q_discrepancies = out.pop(5)
         qf1_loss, qf2_loss, *_values = out
 
-        if self.buffer_is_prioritized and self.num_timesteps >= self.prioritization_starts:
-            if isinstance(self.replay_buffer, HindsightExperienceReplayWrapper):
-                self.replay_buffer.replay_buffer.update_priorities(batch_idxs, q_discrepancies)
-            else:
-                self.replay_buffer.update_priorities(batch_idxs, q_discrepancies)
-
-        return qf1_loss, qf2_loss#, q_discrepancies
+        return qf1_loss, qf2_loss
 
     def learn(self, total_timesteps, callback=None, seed=None,
               log_interval=4, tb_log_name="TD3", reset_num_timesteps=True, replay_wrapper=None):
@@ -451,6 +427,10 @@ class TD3(OffPolicyRLModel):
 
         if replay_wrapper is not None:
             self.replay_buffer = replay_wrapper(self.replay_buffer)
+
+        if isinstance(self.train_freq, tuple):  # TODO: bug with optuna please FIX
+            self.train_freq = self.train_freq[0]
+            self.gradient_steps = self.gradient_steps[0]
 
         with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
                 as writer:
@@ -474,6 +454,7 @@ class TD3(OffPolicyRLModel):
             infos_values = []
             self.active_sampling = False
             initial_step = self.num_timesteps
+            episode_data = []
 
             if self.buffer_is_prioritized and \
                     ((replay_wrapper is not None and self.replay_buffer.replay_buffer.__name__ == "ReplayBuffer")
@@ -483,11 +464,7 @@ class TD3(OffPolicyRLModel):
 
             if self.recurrent_policy:
                 done = False
-                self.pi_state = self.policy_tf.initial_state
-                obs_dict = self.env.convert_obs_to_dict(obs)
-                d_goal = obs_dict["desired_goal"]
-                obs = np.concatenate([obs_dict["observation"], obs_dict["achieved_goal"]])
-                action_prev = np.zeros(shape=self.action_space.shape)
+                self.pi_state = self.policy_tf_act.initial_state
 
             for step in range(initial_step, total_timesteps):
                 if callback is not None:
@@ -506,7 +483,7 @@ class TD3(OffPolicyRLModel):
                     rescaled_action = action = self.env.action_space.sample()
                 else:
                     if self.recurrent_policy:
-                        action, self.pi_state = self.policy_tf_act.step(obs[None], state=self.pi_state, goal=d_goal[None], action_prev=action_prev[None], mask=np.array(done)[None])
+                        action, self.pi_state = self.policy_tf_act.step(obs[None], state=self.pi_state, mask=np.array(done)[None])
                         action = action.flatten()
                     else:
                         action = self.policy_tf.step(obs[None]).flatten()
@@ -521,24 +498,23 @@ class TD3(OffPolicyRLModel):
 
                 new_obs, reward, done, info = self.env.step(rescaled_action)
 
+                if self.reward_transformation is not None:
+                    reward = self.reward_transformation(reward)
+
                 # Store transition in the replay buffer.
                 extra_data = {}
-                if self.recurrent_policy:
-                    action_prev = action
-                    new_obs = self.env.convert_obs_to_dict(new_obs)
-                    d_goal = new_obs["desired_goal"]
-                    new_obs = np.concatenate([new_obs["observation"], new_obs["achieved_goal"]])
-                    extra_data["goal"] = d_goal
-                    if done:
-                        extra_data["my"] = self._get_env_parameters()
                 if self.time_aware:
                     bootstrap = True
-                    info_time_limit = info.get("TimeLimit.truncated", None)
                     if done:
+                        info_time_limit = info.get("TimeLimit.truncated", None)
                         bootstrap = info.get("termination", None) == "steps" or \
                                     (info_time_limit is not None and info_time_limit)
                     extra_data["bootstrap"] = bootstrap
+
+                if hasattr(self.policy, "collect_data"):
+                    extra_data.update(self.policy_tf_act.collect_data(locals(), globals()))
                 self.replay_buffer.add(obs, action, reward, new_obs, done, **extra_data)
+                episode_data.append({"obs": obs, "action": action, "reward": reward, "new_obs": new_obs, "done": done, **extra_data})
                 obs = new_obs
 
                 if ((replay_wrapper is not None and self.replay_buffer.replay_buffer.__name__ == "RankPrioritizedReplayBuffer")\
@@ -596,11 +572,7 @@ class TD3(OffPolicyRLModel):
                             obs = self.env.reset(**sample_state[np.argmax(obs_discrepancies)])
                         else:
                             obs = self.env.reset()
-                            if self.recurrent_policy:
-                                obs_dict = self.env.convert_obs_to_dict(obs)
-                                d_goal = obs_dict["desired_goal"]
-                                obs = np.concatenate([obs_dict["observation"], obs_dict["achieved_goal"]])
-                                action_prev = np.zeros(shape=self.action_space.shape)
+                    episode_data = []
                     episode_rewards.append(0.0)
 
                     maybe_is_success = info.get('is_success')
@@ -715,17 +687,14 @@ class TD3(OffPolicyRLModel):
         warnings.warn("Warning: action probability is meaningless for TD3. Returning None")
         return None
 
-    def predict(self, observation, state=None, mask=None, deterministic=True, action_prev=None):
+    def predict(self, observation, state=None, mask=None, deterministic=True):
         observation = np.array(observation)
         vectorized_env = self._is_vectorized_observation(observation, self.observation_space)
 
         observation = observation.reshape((-1,) + self.observation_space.shape)
         state = None
         if self.recurrent_policy:
-            obs_dict = self.env.convert_obs_to_dict(observation[0]) # TODO: fix for batch size > 1
-            d_goal = obs_dict["desired_goal"]
-            obs = np.concatenate([obs_dict["observation"], obs_dict["achieved_goal"]])
-            actions, state = self.policy_tf_act.step(obs[None], state=state, mask=mask, goal=d_goal[None], action_prev=action_prev[None])
+            actions, state = self.policy_tf_act.step(observation, state=state, mask=mask)
         else:
             actions = self.policy_tf.step(observation)
 
@@ -747,11 +716,11 @@ class TD3(OffPolicyRLModel):
         return env
 
     def _get_env_parameters(self):
+        return np.zeros((37,))
         if isinstance(self.env, HERGoalEnvWrapper):
             return self.env.env.get_simulator_parameters()
         else:
             return self.env.get_simulator_parameters()
-
 
     def _set_prioritized_buffer(self):
         buffer_kw = {"size": self.buffer_size, "alpha": 0.7}
@@ -801,7 +770,9 @@ class TD3(OffPolicyRLModel):
             "random_exploration": self.random_exploration,
             "_vectorize_action": self._vectorize_action,
             "policy_kwargs": self.policy_kwargs,
-            "num_timesteps": self.num_timesteps
+            "num_timesteps": self.num_timesteps,
+            "buffer_type": self.buffer_type,
+            "buffer_kwargs": self.buffer_kwargs
         }
 
         params_to_save = self.get_parameters()
