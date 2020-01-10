@@ -637,6 +637,7 @@ class TD3(OffPolicyRLModel):
             initial_step = self.num_timesteps
             n_updates = 0
             mb_infos_vals = []
+            start_time = time.time()
 
             for step in range(initial_step, total_timesteps):
                 if callback is not None:
@@ -756,7 +757,7 @@ class TD3(OffPolicyRLModel):
             # Should we also store the replay buffer?
             # this may lead to high memory usage
             # with all transition inside
-            #"replay_buffer": self.replay_buffer,
+            "replay_buffer": self.replay_buffer,
             "policy_delay": self.policy_delay,
             "target_noise_clip": self.target_noise_clip,
             "target_policy_noise": self.target_policy_noise,
