@@ -173,7 +173,10 @@ class TD3(OffPolicyRLModel):
                         if "goal_size" in policy_tf_args:
                             policy_tf_kwargs["goal_size"] = self.env.goal_dim
 
-                        scan_length = self.buffer_kwargs.get("scan_length", 0)
+                        if self.buffer_kwargs is not None:
+                            scan_length = self.buffer_kwargs.get("scan_length", 0)
+                        else:
+                            scan_length = 0
 
                         self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
                                                      n_batch=self.batch_size, n_steps=scan_length + 1,
@@ -229,7 +232,9 @@ class TD3(OffPolicyRLModel):
                                     {"learning_starts": self.prioritization_starts, "batch_size": self.batch_size})
                             self.replay_buffer = self.buffer_type(**buffer_kw)
                     else:
-                        replay_buffer_kw = {"size": self.buffer_size, **self.buffer_kwargs}
+                        replay_buffer_kw = {"size": self.buffer_size}
+                        if self.buffer_kwargs is not None:
+                            replay_buffer_kw.update(self.buffer_kwargs)
                         if self.recurrent_policy:
                             replay_buffer_kw["extra_data_names"] = self.policy_tf.extra_data_names
                         self.replay_buffer = self.buffer_type(**replay_buffer_kw)
