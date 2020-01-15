@@ -4,6 +4,8 @@ import numpy as np
 
 from stable_baselines.common.segment_tree import SumSegmentTree, MinSegmentTree
 
+from sklearn.cluster import KMeans
+
 
 class ReplayBuffer(object):
     __name__ = "ReplayBuffer"
@@ -95,6 +97,94 @@ class ReplayBuffer(object):
         """
         idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]
         return self._encode_sample(idxes)
+
+
+class ClusterStorage:
+    def __init__(self, n_clusters):
+        self._clusters = [[] for i in range(n_clusters)]
+        self.active_cluster = 0
+        self.n_clusters = n_clusters
+        self.cluster_sizes = [0 for i in range(n_clusters)]
+
+    def append(self, data):
+        self._clusters[self.active_cluster].append(data)
+        self.cluster_sizes[self.active_cluster] += 1
+
+    def __len__(self):
+        return len(self._clusters[self.active_cluster])
+
+    def __getitem__(self, item):
+        return self._clusters[self.active_cluster][item]
+
+    def __setitem__(self, key, value):
+        self._clusters[self.active_cluster][key] = value
+
+
+class ClusteredReplayBuffer(ReplayBuffer):
+    def __init__(self, size, cluster_on, n_clusters=5, recluster_every=1000, strategy="single"):
+        super().__init__(size)
+        self._storage = ClusterStorage(n_clusters)
+        data_idxs = {"obs": 0, "action": 1, "reward": 2, "obs_tp1": 3, "done": 4}
+        self._cluster_on_idx = data_idxs[cluster_on]
+        self.cluster_alg = KMeans(n_clusters)
+        self._strategy = strategy
+        self._recluster_every = recluster_every
+
+    def add(self, obs_t, action, reward, obs_tp1, done):
+        cluster_idx = self.cluster_alg.predict(obs_t[None])[0]  # TODO: cluster on
+        self._storage.active_cluster = cluster_idx
+        super().add(obs_t, action, reward, obs_tp1, done)
+
+    def batch_add(self, batch):
+        cluster_idxs = self.cluster_alg.predict([s[self._cluster_on_idx] for s in batch])
+        for i, idx in enumerate(cluster_idxs):
+            self._storage.active_cluster = idx
+            self._storage.append(batch[i])
+
+    def sample(self, batch_size, strategy=None):
+        if strategy is None:
+            strategy = self._strategy
+        if strategy == "single":
+            cluster_idx = random.randint(0, self._storage.n_clusters - 1)
+            self._storage.active_cluster = cluster_idx
+            return super().sample(batch_size)
+        elif strategy in ["uniform", "proportional"]:
+            if strategy == "uniform":
+                samples_per_cluster = [batch_size // self._storage.n_clusters] * self._storage.n_clusters
+                num_samples_left_over = batch_size % self._storage.n_clusters
+            elif strategy == "proportional":
+                total_size = sum(self._storage.cluster_sizes)
+                samples_per_cluster = [int(self._storage.cluster_sizes[i] / total_size * batch_size) for i in range(self._storage.n_clusters)]
+                num_samples_left_over = batch_size - sum(samples_per_cluster)
+
+            leftover_samples_cluster_idxs = random.choices(range(self._storage.n_clusters), k=num_samples_left_over)
+            for idx in leftover_samples_cluster_idxs:
+                samples_per_cluster[idx] += 1
+
+            data = [[] for i in range(5)]
+            for cluster_i in range(self._storage.n_clusters):
+                self._storage.active_cluster = cluster_i
+                c_s = super().sample(batch_size=samples_per_cluster[cluster_i])
+                for i in range(5):
+                    data[i].append(c_s[i])
+
+            res = []
+            for i in range(5):
+                res.append(np.concatenate(data[i], axis=0))
+
+            return res[0], res[1], res[2], res[3], res[4]
+        else:
+            raise ValueError # TODO: even/uniform/distribution
+
+    def __len__(self):
+        tot_len = 0
+        orig_active_cluster = self._storage.active_cluster
+        for i in range(self._storage.n_clusters):
+            self._storage.active_cluster = i
+            tot_len += len(self._storage)
+
+        self._storage.active_cluster = orig_active_cluster
+        return tot_len
 
 
 # TODO: lots of work to do on this one
