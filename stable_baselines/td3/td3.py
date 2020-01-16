@@ -381,7 +381,9 @@ class TD3(OffPolicyRLModel):
             sample_kw["beta"] = self.beta_schedule(self.num_timesteps)
 
         batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, *batch_extra = self.replay_buffer.sample(self.batch_size, **sample_kw)
-        batch_extra = batch_extra[0]
+        if len(batch_extra) > 0:
+            batch_extra = batch_extra[0]
+
 
         feed_dict = {
             self.observations_ph: batch_obs,
