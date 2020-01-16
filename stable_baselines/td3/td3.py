@@ -147,12 +147,6 @@ class TD3(OffPolicyRLModel):
         if self.recurrent_policy:
             self.policy_tf_act = None
             self.policy_act = None
-            self.pi_state_ph = None
-            self.qf1_state_ph = None
-            self.qf2_state_ph = None
-            self.pi_state = None
-            self.qf1_state = None
-            self.qf2_state = None
             self.act_ops = None
             self.dones_ph = None
 
@@ -196,7 +190,10 @@ class TD3(OffPolicyRLModel):
                         if "goal_size" in policy_tf_args:
                             policy_tf_kwargs["goal_size"] = self.env.goal_dim
 
-                        scan_length = self.buffer_kwargs.get("scan_length", 0)
+                        if self.buffer_kwargs is not None:
+                            scan_length = self.buffer_kwargs.get("scan_length", 0)
+                        else:
+                            scan_length = 0
 
                         self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
                                                      n_batch=self.batch_size, n_steps=scan_length + 1,
@@ -215,9 +212,6 @@ class TD3(OffPolicyRLModel):
                             else:
                                 self.train_extra_phs[ph_name] = getattr(self.policy_tf, ph_name + "_ph")
 
-                        self.pi_state_ph = self.policy_tf.pi_state_ph
-                        self.qf1_state_ph = self.policy_tf.qf1_state_ph
-                        self.qf2_state_ph = self.policy_tf.qf2_state_ph
                         self.dones_ph = self.policy_tf.dones_ph
                     else:
                         self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
@@ -259,7 +253,9 @@ class TD3(OffPolicyRLModel):
                                     {"learning_starts": self.prioritization_starts, "batch_size": self.batch_size})
                             self.replay_buffer = self.buffer_type(**buffer_kw)
                     else:
-                        replay_buffer_kw = {"size": self.buffer_size, **self.buffer_kwargs}
+                        replay_buffer_kw = {"size": self.buffer_size}
+                        if self.buffer_kwargs is not None:
+                            replay_buffer_kw.update(self.buffer_kwargs)
                         if self.recurrent_policy:
                             replay_buffer_kw["extra_data_names"] = self.policy_tf.extra_data_names
                             if self.expert is not None and not self.pretrain_expert:
@@ -281,6 +277,7 @@ class TD3(OffPolicyRLModel):
                         critic_args = inspect.signature(self.policy_tf.make_critics).parameters
                         critic_kws = {k: v for k, v in self.train_extra_phs.items() if k in critic_args}
                         qf1, qf2 = self.policy_tf.make_critics(self.processed_obs_ph, self.actions_ph, **critic_kws)
+                        _, _ = self.policy_tf_act.make_critics(None, self.actions_ph, reuse=True)
                         # Q value when following the current policy
                         qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph, policy_out, **critic_kws,
                                                                      reuse=True)
@@ -533,13 +530,7 @@ class TD3(OffPolicyRLModel):
 
         if self.recurrent_policy:
             feed_dict.update({
-                self.dones_ph: batch_extra["reset"],
-                self.pi_state_ph: self.policy_tf.pi_initial_state,
-                self.qf1_state_ph: self.policy_tf.qf1_initial_state,
-                self.qf2_state_ph: self.policy_tf.qf2_initial_state,
-                self.target_policy_tf.pi_state_ph: self.target_policy_tf.pi_initial_state,
-                self.target_policy_tf.qf1_state_ph: self.target_policy_tf.qf1_initial_state,
-                self.target_policy_tf.qf2_state_ph: self.target_policy_tf.qf2_initial_state
+                self.dones_ph: batch_extra["reset"]
             })
 
         feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items()})
@@ -618,7 +609,7 @@ class TD3(OffPolicyRLModel):
 
             if self.recurrent_policy:
                 done = False
-                self.pi_state = self.policy_tf_act.initial_state
+                policy_state = self.policy_tf_act.initial_state
 
             if self.q_filter_scale_noise and len(self.q_filter_moving_average) == 0:
                 self.q_filter_moving_average.append(1)
@@ -651,7 +642,7 @@ class TD3(OffPolicyRLModel):
                         agent_score, expert_score = self.sess.run([self.qf1_pi, self.qf1_expert], {self.observations_ph: obs[None], self.expert_actions_ph: action[None]})
                         if agent_score >= expert_score:
                             if self.recurrent_policy:
-                                action, self.pi_state = self.policy_tf_act.step(obs[None], state=self.pi_state,
+                                action, self.pi_state = self.policy_tf_act.step(obs[None], state=policy_state,
                                                                                 mask=np.array(done)[None])
                                 action = action.flatten()
                             else:
@@ -660,7 +651,7 @@ class TD3(OffPolicyRLModel):
                             action = expert_action
                     else:
                         if self.recurrent_policy:
-                            action, self.pi_state = self.policy_tf_act.step(obs[None], state=self.pi_state,
+                            action, self.pi_state = self.policy_tf_act.step(obs[None], state=policy_state,
                                                                             mask=np.array(done)[None])
                             action = action.flatten()
                         else:
