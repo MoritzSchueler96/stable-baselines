@@ -712,7 +712,7 @@ class TD3(OffPolicyRLModel):
         return (self.params +
                 self.target_params)
 
-    def save(self, save_path, cloudpickle=False):
+    def save(self, save_path, cloudpickle=False, save_replay_buffer=False):
         data = {
             "learning_rate": self.learning_rate,
             "buffer_size": self.buffer_size,
@@ -723,7 +723,6 @@ class TD3(OffPolicyRLModel):
             # Should we also store the replay buffer?
             # this may lead to high memory usage
             # with all transition inside
-            #"replay_buffer": self.replay_buffer,
             "policy_delay": self.policy_delay,
             "target_noise_clip": self.target_noise_clip,
             "target_policy_noise": self.target_policy_noise,
@@ -743,6 +742,9 @@ class TD3(OffPolicyRLModel):
             "buffer_type": self.buffer_type,
             "buffer_kwargs": self.buffer_kwargs
         }
+
+        if save_replay_buffer:
+            data["replay_buffer"] = self.replay_buffer
 
         params_to_save = self.get_parameters()
 
