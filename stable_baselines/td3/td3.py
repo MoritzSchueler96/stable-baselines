@@ -130,12 +130,6 @@ class TD3(OffPolicyRLModel):
         if self.recurrent_policy:
             self.policy_tf_act = None
             self.policy_act = None
-            self.pi_state_ph = None
-            self.qf1_state_ph = None
-            self.qf2_state_ph = None
-            self.pi_state = None
-            self.qf1_state = None
-            self.qf2_state = None
             self.act_ops = None
             self.dones_ph = None
 
@@ -195,9 +189,6 @@ class TD3(OffPolicyRLModel):
                             else:
                                 self.train_extra_phs[ph_name] = getattr(self.policy_tf, ph_name + "_ph")
 
-                        self.pi_state_ph = self.policy_tf.pi_state_ph
-                        self.qf1_state_ph = self.policy_tf.qf1_state_ph
-                        self.qf2_state_ph = self.policy_tf.qf2_state_ph
                         self.dones_ph = self.policy_tf.dones_ph
                     else:
                         self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
@@ -250,6 +241,7 @@ class TD3(OffPolicyRLModel):
                         self.policy_act = policy_act = self.policy_tf_act.make_actor(reuse=True)
                         # Use two Q-functions to improve performance by reducing overestimation bias
                         qf1, qf2 = self.policy_tf.make_critics(self.processed_obs_ph, self.actions_ph, **critic_kws)
+                        _, _ = self.policy_tf_act.make_critics(None, self.actions_ph, reuse=True)
                         # Q value when following the current policy
                         qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph, policy_out, **critic_kws,
                                                                      reuse=True)
@@ -404,13 +396,7 @@ class TD3(OffPolicyRLModel):
 
         if self.recurrent_policy:
             feed_dict.update({
-                self.dones_ph: batch_extra["reset"],
-                self.pi_state_ph: self.policy_tf.pi_initial_state,
-                self.qf1_state_ph: self.policy_tf.qf1_initial_state,
-                self.qf2_state_ph: self.policy_tf.qf2_initial_state,
-                self.target_policy_tf.pi_state_ph: self.target_policy_tf.pi_initial_state,
-                self.target_policy_tf.qf1_state_ph: self.target_policy_tf.qf1_initial_state,
-                self.target_policy_tf.qf2_state_ph: self.target_policy_tf.qf2_initial_state
+                self.dones_ph: batch_extra["reset"]
             })
 
         feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items()})
@@ -484,7 +470,7 @@ class TD3(OffPolicyRLModel):
 
             if self.recurrent_policy:
                 done = False
-                self.pi_state = self.policy_tf_act.initial_state
+                policy_state = self.policy_tf_act.initial_state
 
             for step in range(initial_step, total_timesteps):
                 # Before training starts, randomly sample actions
@@ -498,7 +484,7 @@ class TD3(OffPolicyRLModel):
                     action = scale_action(self.action_space, unscaled_action)
                 else:
                     if self.recurrent_policy:
-                        action, self.pi_state = self.policy_tf_act.step(obs[None], state=self.pi_state, mask=np.array(done)[None])
+                        action, policy_state = self.policy_tf_act.step(obs[None], state=policy_state, mask=np.array(done)[None])
                         action = action.flatten()
                     else:
                         action = self.policy_tf.step(obs[None]).flatten()
