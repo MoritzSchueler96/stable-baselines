@@ -299,3 +299,6 @@ class HindsightExperienceReplayWrapper(object):
                         self.replay_buffer.add_her(goal, reward, transition_idx)
                     else:
                         self.replay_buffer.add(obs, action, reward, next_obs, done, *extra_data)
+
+    def update_state(self, *args, **kwargs):
+        return self.replay_buffer.update_state(*args, **kwargs)
