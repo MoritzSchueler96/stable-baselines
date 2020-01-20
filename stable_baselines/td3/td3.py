@@ -170,18 +170,22 @@ class TD3(OffPolicyRLModel):
 
                         if self.buffer_kwargs is not None:
                             scan_length = self.buffer_kwargs.get("scan_length", 0)
+                            sequence_length = self.buffer_kwargs.get("sequence_length", 1)
                         else:
                             scan_length = 0
+                            sequence_length = 1
+
 
                         self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
-                                                     n_batch=self.batch_size, n_steps=scan_length + 1,
+                                                     n_batch=self.batch_size,
+                                                     n_steps=sequence_length,
                                                      **policy_tf_kwargs, **self.policy_kwargs)
                         self.policy_tf_act = self.policy(self.sess, self.observation_space, self.action_space,
                                                          n_batch=1, **policy_tf_kwargs,
                                                          **self.policy_kwargs)
                         self.target_policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
                                                             n_batch=self.batch_size,
-                                                            n_steps=scan_length + 1, **policy_tf_kwargs,
+                                                            n_steps=sequence_length, **policy_tf_kwargs,
                                                             **self.policy_kwargs)
 
                         for ph_name in self.policy_tf.extra_phs:
@@ -346,6 +350,11 @@ class TD3(OffPolicyRLModel):
                     # All ops to call during one training step
                     self.step_ops = [qf1_loss, qf2_loss,
                                      qf1, qf2, train_values_op]
+                    if self.recurrent_policy:
+                        if self.policy_tf.share_lstm:
+                            self.step_ops.append(self.policy_tf.state)
+                        else:
+                            self.step_ops.extend([self.policy_tf.pi_state, self.policy_tf.qf1_state, self.policy_tf.qf2_state])
 
                     # Monitor losses and entropy in tensorboard
                     tf.summary.scalar("rew_loss", rew_loss)
@@ -384,12 +393,10 @@ class TD3(OffPolicyRLModel):
             self.learning_rate_ph: learning_rate
         }
 
-        if self.recurrent_policy:
-            feed_dict.update({
-                self.dones_ph: batch_extra["reset"]
-            })
-
         feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items()})
+
+        if self.recurrent_policy and self.buffer_kwargs["scan_length"] > 0:
+            pass
 
         step_ops = self.step_ops
         if update_policy:
@@ -404,6 +411,13 @@ class TD3(OffPolicyRLModel):
             writer.add_summary(summary, step)
         else:
             out = self.sess.run(step_ops, feed_dict)
+
+        if self.recurrent_policy:
+            if self.policy_tf.share_lstm:
+                states = out[5]
+            else:
+                states = out[5:8]
+            self.replay_buffer.update_state(batch_extra["state_idxs"], states)
 
         # Unpack to monitor losses
         qf1_loss, qf2_loss, *_values = out
