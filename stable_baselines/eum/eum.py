@@ -64,7 +64,7 @@ class EUM(OffPolicyRLModel):
                  target_policy_noise=0.2, target_noise_clip=0.5,
                  random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, time_aware=False,
-                 recurrent_scan_length=0):
+                 recurrent_scan_length=0, uncertainty_scale=1):
 
         super(EUM, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=EUMPolicy, requires_vec_env=False, policy_kwargs=policy_kwargs)
@@ -91,6 +91,7 @@ class EUM(OffPolicyRLModel):
 
         self.time_aware = time_aware
         self.recurrent_scan_length = recurrent_scan_length
+        self.uncertainty_scale = uncertainty_scale
 
         self.graph = None
         self.replay_buffer = None
@@ -281,21 +282,24 @@ class EUM(OffPolicyRLModel):
                 # TODO: introduce somwehere here the placeholder for history which updates internal state?
                 with tf.variable_scope("loss", reuse=False):
                     # Take the min of the two target Q-Values (clipped Double-Q Learning)
-                    mean_qf_target = tf.reduce_mean(tf.stack(qfs_target, axis=0), axis=0)
+                    #mean_qf_target = tf.reduce_mean(tf.stack(qfs_target, axis=0), axis=0)
+                    min_qf_target = qfs_target[0]
+                    for qf_i in range(1, self.policy_tf.n_critics):
+                        min_qf_target = tf.minimum(min_qf_target, qfs_target[qf_i])
 
                     # Targets for Q value regression
                     q_backup = tf.stop_gradient(
                         self.rewards_ph +
-                        (1 - self.terminals_ph) * self.gamma * mean_qf_target
+                        (1 - self.terminals_ph) * self.gamma * min_qf_target
                     )
 
                     qf_losses = [tf.reduce_mean((q_backup - qfs[qf_i]) ** 2) for qf_i in range(self.policy_tf.n_critics)]
 
-                    qvalues_losses = sum(qf_losses)
+                    qvalues_losses = tf.reduce_sum(qf_losses)
                     
                     qfs_pi_mean = tf.reduce_mean(qfs_pi, axis=0)
                     rew_loss = tf.reduce_mean(qfs_pi[0])
-                    uncertainty_loss = 1 / 8 * tf.reduce_mean(tf.reduce_sum((qfs_pi - qfs_pi_mean) ** 2))
+                    uncertainty_loss = self.uncertainty_scale * tf.reduce_mean(tf.reduce_sum((qfs_pi - qfs_pi_mean) ** 2))
                     action_loss = self.action_l2_scale * tf.nn.l2_loss(policy_pre_activation)
 
                     # Policy loss: maximise q value
