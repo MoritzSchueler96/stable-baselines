@@ -152,7 +152,7 @@ class RecurrentReplayBuffer(ReplayBuffer):
         super().__init__(size)
         self._sample_cycle = 0
         self.her_k = her_k
-        self._extra_data_names = extra_data_names
+        self._extra_data_names = sorted(extra_data_names)
         self._data_name_to_idx = {"obs": 0, "action": 1, "reward": 2, "obs_tp1": 3, "done": 4,
                                   **{name: 5 + i for i, name in enumerate(self._extra_data_names)}}
         self._current_episode_data = []
