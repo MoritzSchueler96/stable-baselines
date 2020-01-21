@@ -109,7 +109,7 @@ class HindsightExperienceReplayWrapper(object):
 
     def sample(self, *args, **kwargs):
         batch = self.replay_buffer.sample(*args, **kwargs)
-        if self.replay_buffer.__name__ == "RecurrentReplayBuffer" and self.replay_buffer.scan_length > 0:
+        if self.replay_buffer.__name__ == "RecurrentReplayBuffer" and self.replay_buffer.scan_length > 0 and False:
             # TODO: i think it is guaranteed that there are always scan_length instances but im not sure
             obs, next_obs = batch[0], batch[3]
             sampled_goals = obs[::self.replay_buffer.scan_length + 1, -self.env.goal_dim:]
@@ -293,3 +293,8 @@ class HindsightExperienceReplayWrapper(object):
                         self.replay_buffer.add_her(obs, next_obs, reward, transition_idx)
                     else:
                         self.replay_buffer.add(obs, action, reward, next_obs, done, *extra_data)
+            if self.replay_buffer.__name__ == "RecurrentReplayBuffer":
+                self.replay_buffer.store_episode()
+
+    def update_state(self, *args, **kwargs):
+        return self.replay_buffer.update_state(*args, **kwargs)
