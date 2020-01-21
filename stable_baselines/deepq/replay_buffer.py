@@ -181,6 +181,7 @@ class RecurrentReplayBuffer(ReplayBuffer):
                                   **{name: 5 + i for i, name in enumerate(self._extra_data_names)}}
         self._current_episode_data = []
         self._sequence_length = sequence_length
+        assert self._sequence_length >= 1
         self.scan_length = scan_length
         self._rnn_inputs = rnn_inputs
         assert self.scan_length == 0 or len(self._rnn_inputs) > 0
@@ -229,22 +230,16 @@ class RecurrentReplayBuffer(ReplayBuffer):
         assert batch_size % sequence_length == 0
 
         ep_idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size // sequence_length)]
-        ep_ts = [random.randint(self.scan_length * (1 + self.her_k),
-                                (len(self._storage[ep_i]) - 1 - sequence_length) * (1 + self.her_k) + 1)
-                 for ep_i in ep_idxes]
+        ep_ts = [random.randint(self.scan_length, len(self._storage[ep_i]) - 1 - (sequence_length - 1)) for ep_i in ep_idxes]
         extra_data = {name: [] for name in self._extra_data_names}
         extra_data.update({"scan_{}".format(name): [] for name in self._rnn_inputs})
-        state_t = []
 
         obses_t, actions, rewards, obses_tp1, dones = [], [], [], [], []
         for i, ep_i in enumerate(ep_idxes):
             ep_data = self.storage[ep_i]
-            if self.her_k > 0:  # TODO: understand this
-                ep_t = int(ep_ts[i] / (self.her_k + 1))
-                her_idx = ep_ts[i] - ep_t * (self.her_k + 1)  # Doesnt matter if it is consistent through sequence, right?
-            else:
-                ep_t = ep_ts[i]
-            state_t.append(ep_t)
+            ep_t = ep_ts[i]
+            if self.her_k > 0:
+                her_idx = random.randint(0, self.her_k + 2)
             for scan_t in range(ep_t - self.scan_length, ep_t):
                 for scan_data_name in self._rnn_inputs:
                     data = ep_data[scan_t][self._data_name_to_idx[scan_data_name]]
@@ -272,65 +267,9 @@ class RecurrentReplayBuffer(ReplayBuffer):
 
         extra_data = {k: np.array(v) for k, v in extra_data.items()}
         extra_data["state"] = extra_data["state"][::sequence_length]
-        extra_data["state_idxs"] = list(zip(ep_idxes, state_t))
+        extra_data["state_idxs"] = list(zip(ep_idxes, ep_ts))
 
         return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), extra_data
-
-    def _encode_sample(self, ep_idxes, ep_ts):
-        obses_t, actions, rewards, obses_tp1, dones = [], [], [], [], []
-        extra_data_not_rnn = [name for name in self._extra_data_names if name not in self._rnn_inputs]
-        extra_data_not_rnn_idxs = [self._data_name_to_idx[name] for name in extra_data_not_rnn]
-        extra_data = [[] for i in range(len(extra_data_not_rnn))]
-        hists = [[] for i in range(len(self._rnn_inputs))]
-
-        for i, ep_i in enumerate(ep_idxes):
-            if self.her_k > 0:
-                ep_t = int(ep_ts[i] / (self.her_k + 1))
-            else:
-                ep_t = ep_ts[i]
-            ep_data = self._storage[ep_i]
-            obs_t, action, reward, obs_tp1, done, *extra_timestep_data = ep_data[ep_t]
-            if self.her_k > 0:
-                her_idx = ep_ts[i] - ep_t * (self.her_k + 1)
-                obs_t, obs_tp1, reward = obs_t[her_idx], obs_tp1[her_idx], reward[her_idx]
-            if self.scan_length > 0:
-                ep_scan_start = ep_t - self.scan_length if ep_t - self.scan_length >= 0 else 0
-                ep_hists = [[] for i in range(len(self._rnn_inputs))]
-                for hist_i in range(ep_scan_start, ep_t + 1):
-                    for input_i, data_idx in enumerate(self._rnn_data_idxs):
-                        hist_data = ep_data[hist_i][data_idx]
-                        if self.her_k > 0 and data_idx in [0, 2, 3]:
-                            hist_data = hist_data[ep_ts[i] - ep_t * (self.her_k + 1)]
-                        ep_hists[input_i].append(np.array(hist_data))
-            else:
-                ep_hists = [[ep_data[data_idx]] for data_idx in self._rnn_data_idxs]
-            obses_t.append(np.array(obs_t, copy=False))
-            actions.append(np.array(action, copy=False))
-            rewards.append(reward)
-            obses_tp1.append(np.array(obs_tp1, copy=False))
-            dones.append(done)
-            for hist_i in range(len(hists)):
-                hists[hist_i].extend(ep_hists[hist_i])
-            for j, data_i in enumerate(extra_data_not_rnn_idxs):
-                if np.ndim(extra_timestep_data[j]) == 0:
-                    extra_data[j].append(extra_timestep_data[data_i - 5])
-                else:
-                    extra_data[j].append(np.array(extra_timestep_data[data_i - 5], copy=False))
-
-        extra_data_dict = {name: np.array(extra_data[i]) for i, name in enumerate(extra_data_not_rnn)}
-        batch_resets = np.zeros(shape=(len(ep_idxes) * (self.scan_length + 1)), dtype=np.bool)
-        batch_resets[::self.scan_length] = 1
-        extra_data_dict["reset"] = batch_resets
-        res = [np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones),
-            extra_data_dict]
-        for i, name in enumerate(self._rnn_inputs):
-            rnn_input_idx = self._rnn_data_idxs[i]
-            if rnn_input_idx < 5:
-                res[rnn_input_idx] = np.array(hists[i])
-            else:
-                res[-1][name] = np.array(hists[i])
-
-        return res
 
     def update_state(self, idxs, data):
         for i, (ep_idx, t) in enumerate(idxs):
