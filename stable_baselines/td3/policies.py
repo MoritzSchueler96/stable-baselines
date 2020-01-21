@@ -391,8 +391,6 @@ class DRPolicy(RecurrentPolicy):
                                                 share_lstm=share_lstm, layer_norm=layer_norm, act_fun=act_fun,
                                                 obs_module_indices=obs_module_indices, **kwargs)
 
-        self.n_batch = n_batch  # TODO: fix this in a less hacky way?
-
         with tf.variable_scope("input", reuse=False):
             self.action_prev_rnn_ph = tf.placeholder(tf.float32, (None,) + ac_space.shape, name="action_prev_ph")
             self.my_ph = tf.placeholder(tf.float32, (None, my_size), name="my_ph")  # the dynamics of the environment
@@ -400,7 +398,7 @@ class DRPolicy(RecurrentPolicy):
         self.action_prev = np.zeros((1, *self.ac_space.shape))
         self.goal_size = goal_size
         self.extra_phs = sorted(self.extra_phs + ["action_prev_rnn", "my", "target_action_prev_rnn"])
-        self.rnn_inputs = sorted(self.rnn_inputs + ["obs", "action_prev_rnn", "target_action_prev_rnn", "obs_tp1"])
+        self.rnn_inputs = sorted(self.rnn_inputs + ["obs", "action_prev_rnn"])
         self.extra_data_names = sorted(self.extra_data_names + ["action_prev_rnn", "my", "target_action_prev_rnn"])
 
     def make_actor(self, obs_ff=None, obs_rnn=None, action_prev=None, dones=None, reuse=False, scope="pi"):

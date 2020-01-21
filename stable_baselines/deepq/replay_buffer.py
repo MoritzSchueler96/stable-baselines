@@ -112,7 +112,7 @@ class RecurrentReplayBuffer(ReplayBuffer):
         self._sequence_length = sequence_length
         self.scan_length = scan_length
         self._rnn_inputs = rnn_inputs
-        assert self.scan_length == 0 or len(self._rnn_inputs) == 0
+        assert self.scan_length == 0 or len(self._rnn_inputs) > 0
         self._is_full = False
 
     def add(self, obs_t, action, reward, obs_tp1, done, *extra_data):
@@ -124,19 +124,22 @@ class RecurrentReplayBuffer(ReplayBuffer):
         self._current_episode_data.append(data)
         self._sample_cycle += 1
         if done:
-            if len(self._current_episode_data) > self._sequence_length:
-                if not self._is_full:
-                    self._storage.append(self._current_episode_data)
-                else:
-                    self._storage[self._next_idx] = self._current_episode_data
-                    self._next_idx += 1
-                if self._sample_cycle >= self.buffer_size:
-                    self._next_idx = 0
-                    self._sample_cycle = 0
-                    self._is_full = True
+            self.store_episode()
+
+    def store_episode(self):
+        if len(self._current_episode_data) >= self._sequence_length + self.scan_length:
+            if not self._is_full:
+                self._storage.append(self._current_episode_data)
             else:
-                self._sample_cycle -= len(self._current_episode_data)
-            self._current_episode_data = []
+                self._storage[self._next_idx] = self._current_episode_data
+                self._next_idx += 1
+            if self._sample_cycle >= self.buffer_size:
+                self._next_idx = 0
+                self._sample_cycle = 0
+                self._is_full = True
+        else:
+            self._sample_cycle -= (len(self._current_episode_data) - 1) * (1 + self.her_k) + 1
+        self._current_episode_data = []
 
     def add_her(self, obs, obs_tp1, reward, timestep, ep_index=None):
         assert self.her_k > 0
@@ -156,7 +159,7 @@ class RecurrentReplayBuffer(ReplayBuffer):
 
         ep_idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size // sequence_length)]
         ep_ts = [random.randint(self.scan_length * (1 + self.her_k),
-                                (len(self._storage[ep_i]) - (1 + sequence_length)) * (1 + self.her_k))
+                                (len(self._storage[ep_i]) - 1 - sequence_length) * (1 + self.her_k) + 1)
                  for ep_i in ep_idxes]
         extra_data = {name: [] for name in self._extra_data_names}
         extra_data.update({"scan_{}".format(name): [] for name in self._rnn_inputs})
@@ -173,7 +176,10 @@ class RecurrentReplayBuffer(ReplayBuffer):
             state_t.append(ep_t)
             for scan_t in range(ep_t - self.scan_length, ep_t):
                 for scan_data_name in self._rnn_inputs:
-                    extra_data["scan_{}".format(scan_data_name)].append(ep_data[ep_t][self._data_name_to_idx[scan_data_name]])
+                    data = ep_data[scan_t][self._data_name_to_idx[scan_data_name]]
+                    if self.her_k > 0 and self._data_name_to_idx[scan_data_name] in [self._data_name_to_idx[n] for n in ["obs", "reward", "obs_tp1"]]:
+                        data = data[0]
+                    extra_data["scan_{}".format(scan_data_name)].append(data)
             for seq_i in range(sequence_length):
                 obs_t, action, reward, obs_tp1, done, *extra_timestep_data = ep_data[ep_t + seq_i]
                 if self.her_k > 0:
@@ -264,8 +270,9 @@ class RecurrentReplayBuffer(ReplayBuffer):
             else:
                 self.storage[ep_idx][t][self._data_name_to_idx["state"]] = data[i, :]
 
-    def __len__(self):
-        return self._sample_cycle if not self._is_full else self.buffer_size
+    def __len__(self):  # TODO: consider if this is important enough to do right
+        return max(self._sample_cycle - ((len(self._current_episode_data) - 1) * (1 + self.her_k) + 1), 0) \
+            if not self._is_full else self.buffer_size
 
     def is_full(self):
         return self._is_full
