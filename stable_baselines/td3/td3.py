@@ -168,12 +168,9 @@ class TD3(OffPolicyRLModel):
                             policy_tf_kwargs["goal_size"] = self.env.goal_dim
 
                         if self.buffer_kwargs is not None:
-                            scan_length = self.buffer_kwargs.get("scan_length", 0)
                             sequence_length = self.buffer_kwargs.get("sequence_length", 1)
                         else:
-                            scan_length = 0
                             sequence_length = 1
-
 
                         self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
                                                      n_batch=self.batch_size,
@@ -186,6 +183,14 @@ class TD3(OffPolicyRLModel):
                                                             n_batch=self.batch_size,
                                                             n_steps=sequence_length, **policy_tf_kwargs,
                                                             **self.policy_kwargs)
+
+                        # TODO: litta hack
+                        if self.policy_tf.share_lstm:
+                            self.target_policy_tf.state_ph = self.policy_tf.state_ph
+                        else:
+                            self.target_policy_tf.pi_state_ph = self.policy_tf.pi_state_ph
+                            self.target_policy_tf.qf1_state_ph = self.policy_tf.qf1_state_ph
+                            self.target_policy_tf.qf2_state_ph = self.policy_tf.qf2_state_ph
 
                         for ph_name in self.policy_tf.extra_phs:
                             if "target_" in ph_name:
@@ -232,6 +237,7 @@ class TD3(OffPolicyRLModel):
                             replay_buffer_kw.update(self.buffer_kwargs)
                         if self.recurrent_policy:
                             replay_buffer_kw["extra_data_names"] = self.policy_tf.extra_data_names
+                            replay_buffer_kw["rnn_inputs"] = self.policy_tf.rnn_inputs
                         self.replay_buffer = self.buffer_type(**replay_buffer_kw)
 
                 with tf.variable_scope("model", reuse=False):
@@ -403,10 +409,18 @@ class TD3(OffPolicyRLModel):
             self.learning_rate_ph: learning_rate
         }
 
-        feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items()})
-
         if self.recurrent_policy and self.buffer_kwargs["scan_length"] > 0:
-            pass
+            feed_dict_scan = {self.observations_ph: batch_extra.pop("scan_obs")}
+            feed_dict_scan.update({self.train_extra_phs[k.replace("scan_", "")]: v for k, v in batch_extra.items() if "scan_" in k})
+            if self.policy_tf.share_lstm:
+                states = self.sess.run(self.policy_tf.state, feed_dict_scan)
+                batch_extra["state"] = states
+            else:
+                states = self.sess.run([self.policy_tf.pi_state, self.policy_tf.qf1_state, self.policy_tf.qf2_state],
+                                       feed_dict_scan)
+                batch_extra.update({k: states[i] for i, k in enumerate(["pi_state", "qf1_state", "qf2_state"])})
+
+        feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items()})
 
         step_ops = self.step_ops
         if update_policy:
