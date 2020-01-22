@@ -21,7 +21,7 @@ class HER(BaseRLModel):
     """
 
     def __init__(self, policy, env, model_class, n_sampled_goal=4,
-                 goal_selection_strategy='future', *args, **kwargs):
+                 goal_selection_strategy='future', norm=False, *args, **kwargs):
 
         assert not isinstance(env, VecEnvWrapper), "HER does not support VecEnvWrapper"
 
@@ -44,7 +44,7 @@ class HER(BaseRLModel):
         self.goal_selection_strategy = goal_selection_strategy
 
         if self.env is not None:
-            self._create_replay_wrapper(self.env)
+            self._create_replay_wrapper(self.env, norm)
 
         assert issubclass(model_class, OffPolicyRLModel), \
             "Error: HER only works with Off policy model (such as DDPG, SAC, TD3 and DQN)."
@@ -53,13 +53,13 @@ class HER(BaseRLModel):
         # Patch to support saving/loading
         self.model._save_to_file = self._save_to_file
 
-    def _create_replay_wrapper(self, env):
+    def _create_replay_wrapper(self, env, norm=False):
         """
         Wrap the environment in a HERGoalEnvWrapper
         if needed and create the replay buffer wrapper.
         """
         if not isinstance(env, HERGoalEnvWrapper):
-            env = HERGoalEnvWrapper(env)
+            env = HERGoalEnvWrapper(env, norm)
 
         self.env = env
         # NOTE: we cannot do that check directly with VecEnv

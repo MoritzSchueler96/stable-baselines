@@ -282,7 +282,6 @@ class HindsightExperienceReplayWrapper(object):
                     obs_dict['desired_goal'] = goal
                     next_obs_dict['desired_goal'] = goal
 
-                    # Update the reward according to the new desired goal
                     prev_state = obs_dict["achieved_goal"]
                     achieved_goal = next_obs_dict['achieved_goal']
                     desired_goal = goal
