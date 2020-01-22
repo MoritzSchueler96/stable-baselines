@@ -146,7 +146,7 @@ class HindsightExperienceReplayWrapper(object):
             selected_transition = episode_transitions[selected_idx]
         elif self.goal_selection_strategy == GoalSelectionStrategy.FUTURE:
             # Sample a goal that was observed in the same episode after the current step
-            selected_idx = np.random.choice(np.arange(transition_idx + 1, len(episode_transitions)))
+            selected_idx = np.random.randint(transition_idx + 1, len(episode_transitions))
             selected_transition = episode_transitions[selected_idx]
         elif self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
             weights = 1 / (self.stable_indices[self.stable_indices > transition_idx] - transition_idx + 1)
