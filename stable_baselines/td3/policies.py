@@ -408,6 +408,7 @@ class DRPolicy(RecurrentPolicy):
             action_prev = self.action_prev_rnn_ph
 
         obs_ff, goal = obs_ff[:, :-self.goal_size], obs_ff[:, -self.goal_size:]
+        goal = tf.subtract(goal, obs_ff[:, -self.goal_size:], name="goal_relative")
         obs_rnn = obs_rnn[:, :-self.goal_size]
 
         ff_phs = [obs_ff, goal]
@@ -427,6 +428,7 @@ class DRPolicy(RecurrentPolicy):
             action_prev = self.action_prev_rnn_ph
 
         obs_ff, goal = obs_ff[:, :-self.goal_size], obs_ff[:, -self.goal_size:]
+        goal = tf.subtract(goal, obs_ff[:, -self.goal_size:], name="goal_relative")
         obs_rnn = obs_rnn[:, :-self.goal_size]
 
         ff_phs = [obs_ff, goal, my, action_ff]
