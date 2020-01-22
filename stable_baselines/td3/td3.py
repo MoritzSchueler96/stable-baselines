@@ -419,6 +419,7 @@ class TD3(OffPolicyRLModel):
                 states = self.sess.run([self.policy_tf.pi_state, self.policy_tf.qf1_state, self.policy_tf.qf2_state],
                                        feed_dict_scan)
                 batch_extra.update({k: states[i] for i, k in enumerate(["pi_state", "qf1_state", "qf2_state"])})
+            self.replay_buffer.update_state(batch_extra["state_idxs_scan"], states)
 
         feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items()})
 
