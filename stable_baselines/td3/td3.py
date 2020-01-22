@@ -721,9 +721,9 @@ class TD3(OffPolicyRLModel):
                 if self.expert is not None and not self.pretrain_expert:
                     if getattr(self.env, "norm", False):  # If norm, first get action from obs (not new_obs)
                         extra_data["expert_action"] = expert_action
-                        extra_data["original_obs"] = original_obs
-                        original_obs = self.env.get_original_obs()  # get unnormalized new_obs
-                        extra_data["original_obs_new"] = original_obs
+                        #extra_data["original_obs"] = original_obs
+                        #original_obs = self.env.get_original_obs()  # get unnormalized new_obs
+                        #extra_data["original_obs_new"] = original_obs
                     else:
                         extra_data["expert_action"] = expert_action
 
