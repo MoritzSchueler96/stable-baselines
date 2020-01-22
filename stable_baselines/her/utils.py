@@ -20,7 +20,7 @@ class HERGoalEnvWrapper(object):
     :param env: (gym.GoalEnv)
     """
 
-    def __init__(self, env, norm=False, clip_obs=5):
+    def __init__(self, env, norm=False, clip_obs=10):
         super(HERGoalEnvWrapper, self).__init__()
         self.env = env
         self.metadata = self.env.metadata
@@ -70,9 +70,11 @@ class HERGoalEnvWrapper(object):
         self.norm = norm
         self.training = True
         self.orig_obs = None
-        self.epsilon = 1e-2
+        self.epsilon = 1e-5
         if norm:
-            self.obs_rms = RunningMeanStdSerial(shape=self.observation_space.shape)
+            obs_norm_shape = list(self.observation_space.shape)
+            obs_norm_shape[0] -= self.goal_dim
+            self.obs_rms = RunningMeanStdSerial(shape=obs_norm_shape)
             self.ret_rms = RunningMeanStdSerial(shape=())
             self.clip_obs = clip_obs
 
@@ -127,8 +129,13 @@ class HERGoalEnvWrapper(object):
                 is_dict = True
                 obs = self.convert_dict_to_obs(obs)
             if self.training:
-                self.obs_rms.update(obs)
-            obs = np.clip((obs - self.obs_rms.mean) / np.sqrt(self.obs_rms.var + self.epsilon), -self.clip_obs, self.clip_obs)
+                self.obs_rms.update(obs[:-self.goal_dim])
+            obs[:-self.goal_dim] = np.clip((obs[:-self.goal_dim] - self.obs_rms.mean) /
+                                           np.sqrt(self.obs_rms.var + self.epsilon),
+                                           -self.clip_obs, self.clip_obs)
+            obs[-self.goal_dim:] = np.clip((obs[-self.goal_dim:] - self.obs_rms.mean[-self.goal_dim:]) /
+                                           np.sqrt(self.obs_rms.var[-self.goal_dim:] + self.epsilon),
+                                           -self.clip_obs, self.clip_obs)
 
             if is_dict:
                 return self.convert_obs_to_dict(obs)
@@ -171,10 +178,19 @@ class HERGoalEnvWrapper(object):
         return obs
 
     def compute_reward(self, achieved_goal, desired_goal, info):
+        if self.norm:
+            achieved_goal = achieved_goal * np.sqrt(self.obs_rms.var[-self.goal_dim:] + self.epsilon) + \
+                            self.obs_rms.mean[-self.goal_dim:]
+            desired_goal = desired_goal * np.sqrt(self.obs_rms.var[-self.goal_dim:] + self.epsilon) + \
+                            self.obs_rms.mean[-self.goal_dim:]
+
         return self.env.compute_reward(achieved_goal, desired_goal, info)
 
     def render(self, mode='human', **kwargs):
         return self.env.render(mode, **kwargs)
+
+    def get_env_parameters(self, *args, **kwargs):
+        return self.env.get_env_parameters(*args, **kwargs)
 
     def close(self):
         return self.env.close()
