@@ -165,7 +165,7 @@ class TD3(OffPolicyRLModel):
                         if "my_size" in policy_tf_args:
                             policy_tf_kwargs["my_size"] = len(self._get_env_parameters())
                         if "goal_size" in policy_tf_args:
-                            policy_tf_kwargs["goal_size"] = self.env.goal_dim
+                            policy_tf_kwargs["goal_size"] = self.env.goal_dim  # TODO: need to get this some other way or save it
 
                         if self.buffer_kwargs is not None:
                             sequence_length = self.buffer_kwargs.get("sequence_length", 1)
