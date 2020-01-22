@@ -27,6 +27,7 @@ class GoalSelectionStrategy(Enum):
     # Select a stable goal that was achieved (stable as in achieved in many consecutive steps)
     # after the current step, in the same episode
     FUTURE_STABLE = 4
+    HORIZON = 5
 
 
 # For convenience
@@ -36,7 +37,8 @@ KEY_TO_GOAL_STRATEGY = {
     'future': GoalSelectionStrategy.FUTURE,
     'final': GoalSelectionStrategy.FINAL,
     'episode': GoalSelectionStrategy.EPISODE,
-    'random': GoalSelectionStrategy.RANDOM
+    'random': GoalSelectionStrategy.RANDOM,
+    "horizon": GoalSelectionStrategy.HORIZON
 }
 
 
@@ -137,7 +139,12 @@ class HindsightExperienceReplayWrapper(object):
         :param transition_idx: (int) the transition to start sampling from
         :return: (np.ndarray) an achieved goal
         """
-        if self.goal_selection_strategy == GoalSelectionStrategy.FUTURE:
+        if self.goal_selection_strategy == GoalSelectionStrategy.HORIZON:
+            selected_idx = np.random.randint(transition_idx + 1,
+                                             min(int(transition_idx + 2 + 0.05 * len(episode_transitions)),
+                                                 len(episode_transitions)))
+            selected_transition = episode_transitions[selected_idx]
+        elif self.goal_selection_strategy == GoalSelectionStrategy.FUTURE:
             # Sample a goal that was observed in the same episode after the current step
             selected_idx = np.random.choice(np.arange(transition_idx + 1, len(episode_transitions)))
             selected_transition = episode_transitions[selected_idx]
@@ -247,7 +254,7 @@ class HindsightExperienceReplayWrapper(object):
                     continue
 
                 # We cannot sample a goal from the future in the last step of an episode
-                if transition_idx == len(self.episode_transitions) - 1 and self.goal_selection_strategy == GoalSelectionStrategy.FUTURE:
+                if transition_idx == len(self.episode_transitions) - 1 and self.goal_selection_strategy in [GoalSelectionStrategy.FUTURE, GoalSelectionStrategy.HORIZON]:
                     break
                 elif transition_idx >= len(self.episode_transitions) - 2 and self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
                     continue
