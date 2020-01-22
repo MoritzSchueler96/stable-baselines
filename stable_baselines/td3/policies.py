@@ -457,9 +457,9 @@ class DRPolicy(RecurrentPolicy):
 
         if self.save_state:
             if self.share_lstm:
-                data["state"] = _locals["policy_state"][0, :]
+                data["state"] = _locals["prev_policy_state"][0, :]
             else:
-                data["pi_state"] = _locals["policy_state"][0, :]
+                data["pi_state"] = _locals["policy_state"][0, :]  # TODO: fix this, should be h_t-1 not h_t
                 if len(_locals["episode_data"]) == 0:
                     qf1_state_prev, qf2_state_prev = self.initial_state, self.initial_state
                     action_prev = np.zeros(self.ac_space.shape)

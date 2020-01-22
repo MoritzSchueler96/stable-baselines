@@ -499,6 +499,7 @@ class TD3(OffPolicyRLModel):
             if self.recurrent_policy:
                 done = False
                 policy_state = self.policy_tf_act.initial_state
+                prev_policy_state = self.policy_tf_act.initial_state
 
             for step in range(initial_step, total_timesteps):
                 # Before training starts, randomly sample actions
@@ -607,11 +608,11 @@ class TD3(OffPolicyRLModel):
                     # Log losses and entropy, useful for monitor training
                     if len(mb_infos_vals) > 0:
                         infos_values = np.mean(mb_infos_vals, axis=0)
-
                     callback.on_rollout_start()
 
-
-                episode_rewards[-1] += reward_
+                episode_rewards[-1] += reward
+                if self.recurrent_policy:
+                    prev_policy_state = policy_state
                 if done:
                     if isinstance(self.replay_buffer, DiscrepancyReplayBuffer) and n_updates - last_replay_update >= 5000:
                         self.replay_buffer.update_priorities()
