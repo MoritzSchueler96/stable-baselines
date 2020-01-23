@@ -131,6 +131,8 @@ class TD3(OffPolicyRLModel):
             self.policy_act = None
             self.act_ops = None
             self.dones_ph = None
+            self.sequence_length = None
+            self.scan_length = None
 
         self.train_extra_phs = {}
 
@@ -240,6 +242,11 @@ class TD3(OffPolicyRLModel):
                             replay_buffer_kw["extra_data_names"] = self.policy_tf.extra_data_names
                             replay_buffer_kw["rnn_inputs"] = self.policy_tf.rnn_inputs
                         self.replay_buffer = self.buffer_type(**replay_buffer_kw)
+
+                if self.recurrent_policy:
+                    self.sequence_length = self.replay_buffer.sequence_length
+                    self.scan_length = self.replay_buffer.scan_length
+                    assert self.scan_length % self.sequence_length == 0
 
                 with tf.variable_scope("model", reuse=False):
                     # Create the policy
@@ -399,17 +406,24 @@ class TD3(OffPolicyRLModel):
             self.learning_rate_ph: learning_rate
         }
 
-        if self.recurrent_policy and self.buffer_kwargs["scan_length"] > 0:
-            feed_dict_scan = {self.observations_ph: batch_extra.pop("scan_obs")}
-            feed_dict_scan.update({self.train_extra_phs[k.replace("scan_", "")]: v for k, v in batch_extra.items() if "scan_" in k})
-            if self.policy_tf.share_lstm:
-                states = self.sess.run(self.policy_tf.state, feed_dict_scan)
-                batch_extra["state"] = states
-            else:
-                states = self.sess.run([self.policy_tf.pi_state, self.policy_tf.qf1_state, self.policy_tf.qf2_state],
-                                       feed_dict_scan)
+        if self.recurrent_policy and self.buffer_kwargs["scan_length"] > 0:  # TODO: find better condition here
+            obs_scan = batch_extra.pop("scan_obs")
+            for seq_i in range(self.scan_length // self.sequence_length):
+                seq_data_idxs = np.zeros(shape=(self.scan_length,), dtype=np.bool)
+                seq_data_idxs[seq_i * self.sequence_length:(seq_i + 1) * self.sequence_length] = True
+                seq_data_idxs = np.tile(seq_data_idxs, self.batch_size // self.sequence_length)
+                feed_dict_scan = {self.observations_ph: obs_scan[seq_data_idxs]}
+                feed_dict_scan.update({self.train_extra_phs[k.replace("scan_", "")]: v[seq_data_idxs]
+                                       for k, v in batch_extra.items() if "scan_" in k})
+                if self.policy_tf.share_lstm:
+                    states = self.sess.run(self.policy_tf.state, feed_dict_scan)
+                    batch_extra["state"] = states
+                else:
+                    states = self.sess.run([self.policy_tf.pi_state, self.policy_tf.qf1_state, self.policy_tf.qf2_state],
+                                           feed_dict_scan)
                 batch_extra.update({k: states[i] for i, k in enumerate(["pi_state", "qf1_state", "qf2_state"])})
-            self.replay_buffer.update_state(batch_extra["state_idxs_scan"], states)
+                self.replay_buffer.update_state([(idx[0], idx[1] - self.scan_length + self.sequence_length * seq_i)
+                                                 for idx in batch_extra["state_idxs_scan"]], states)
 
         feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items()})
 
