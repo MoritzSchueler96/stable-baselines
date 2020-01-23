@@ -129,17 +129,20 @@ class RecurrentReplayBuffer(ReplayBuffer):
 
     def store_episode(self):
         if len(self._current_episode_data) >= self._sequence_length + self.scan_length:
+            if self._sample_cycle >= self.buffer_size:
+                self._next_idx = 0
+                self._sample_cycle = 0
+                self._is_full = True
             if not self._is_full:
                 self._storage.append(self._current_episode_data)
             else:
                 self._storage[self._next_idx] = self._current_episode_data
                 self._next_idx += 1
-            if self._sample_cycle >= self.buffer_size:
-                self._next_idx = 0
-                self._sample_cycle = 0
-                self._is_full = True
         else:
-            self._sample_cycle -= (len(self._current_episode_data) - 1) * (1 + self.her_k) + 1
+            if self.her_k > 0:
+                self._sample_cycle -= sum([len(t[0]) for t in self._current_episode_data])
+            else:
+                self._sample_cycle -= len(self._current_episode_data)
         self._current_episode_data = []
 
     def add_her(self, obs, obs_tp1, reward, timestep, ep_index=None):
@@ -159,7 +162,8 @@ class RecurrentReplayBuffer(ReplayBuffer):
         assert batch_size % sequence_length == 0
 
         ep_idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size // sequence_length)]
-        ep_ts = [random.randint(self.scan_length, len(self._storage[ep_i]) - 1 - (sequence_length - 1)) for ep_i in ep_idxes]
+        ep_ts = [random.randint(self.scan_length, len(self._storage[ep_i]) - 1 - (sequence_length - 1)) for ep_i in
+                 ep_idxes]
         extra_data = {name: [] for name in self._extra_data_names}
         extra_data.update({"scan_{}".format(name): [] for name in self._rnn_inputs})
 
@@ -172,7 +176,8 @@ class RecurrentReplayBuffer(ReplayBuffer):
             for scan_t in range(ep_t - self.scan_length, ep_t):
                 for scan_data_name in self._rnn_inputs:
                     data = ep_data[scan_t][self._data_name_to_idx[scan_data_name]]
-                    if self.her_k > 0 and self._data_name_to_idx[scan_data_name] in [self._data_name_to_idx[n] for n in ["obs", "reward", "obs_tp1"]]:
+                    if self.her_k > 0 and self._data_name_to_idx[scan_data_name] in [self._data_name_to_idx[n] for n in
+                                                                                     ["obs", "reward", "obs_tp1"]]:
                         data = data[0]
                     extra_data["scan_{}".format(scan_data_name)].append(data)
             for seq_i in range(sequence_length):
@@ -196,18 +201,23 @@ class RecurrentReplayBuffer(ReplayBuffer):
 
         extra_data = {k: np.array(v) for k, v in extra_data.items()}
         extra_data["state"] = extra_data["state"][::sequence_length]
-        extra_data["state_idxs"] = list(zip(ep_idxes, ep_ts))
+        extra_data["state_idxs"] = list(zip(ep_idxes, [t + sequence_length for t in ep_ts]))
+        if self.scan_length > 0:
+            extra_data["state_idxs_scan"] = list(zip(ep_idxes, ep_ts))
 
         return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), extra_data
 
     def update_state(self, idxs, data):
         for i, (ep_idx, t) in enumerate(idxs):
-            if isinstance(data, list):
-                self.storage[ep_idx][t][self._data_name_to_idx["pi_state"]] = data[0][i, :]
-                self.storage[ep_idx][t][self._data_name_to_idx["qf1_state"]] = data[1][i, :]
-                self.storage[ep_idx][t][self._data_name_to_idx["qf2_state"]] = data[2][i, :]
-            else:
-                self.storage[ep_idx][t][self._data_name_to_idx["state"]] = data[i, :]
+            try:
+                if isinstance(data, list):
+                    self.storage[ep_idx][t][self._data_name_to_idx["pi_state"]] = data[0][i, :]
+                    self.storage[ep_idx][t][self._data_name_to_idx["qf1_state"]] = data[1][i, :]
+                    self.storage[ep_idx][t][self._data_name_to_idx["qf2_state"]] = data[2][i, :]
+                else:
+                    self.storage[ep_idx][t][self._data_name_to_idx["state"]] = data[i, :]
+            except IndexError:  # Hidden state computed for last sample in episode, doesnt belong to any sample
+                pass
 
     def __len__(self):  # TODO: consider if this is important enough to do right
         return max(self._sample_cycle - ((len(self._current_episode_data) - 1) * (1 + self.her_k) + 1), 0) \
@@ -224,14 +234,15 @@ class EpisodicRecurrentReplayBuffer(ReplayBuffer):
     def __init__(self, size, episode_length, sequence_length=10, extra_data_names=()):
         super().__init__(size // episode_length)
         self._current_episode_data = []
-        #self._episode_data = []  # Data which is constant within episode
+        # self._episode_data = []  # Data which is constant within episode
         self._extra_data_names = sorted(extra_data_names)
         self._data_name_to_idx = {"obs": 0, "action": 1, "reward": 2, "obs_tp1": 3, "done": 4}
-        self._data_name_to_idx.update({name: i+5 for i, name in enumerate(self._extra_data_names)})
+        self._data_name_to_idx.update({name: i + 5 for i, name in enumerate(self._extra_data_names)})
         self._sequence_length = sequence_length  # TODO: add scan length and assert is multiple of sample_consecutive_max
 
     def add(self, obs_t, action, reward, obs_tp1, done, *extra_data):
-        self._current_episode_data.append([obs_t, action, reward, obs_tp1, done, *extra_data])  # List to support updating states etc.
+        self._current_episode_data.append(
+            [obs_t, action, reward, obs_tp1, done, *extra_data])  # List to support updating states etc.
 
         if done:
             self.store_episode()
@@ -281,11 +292,12 @@ class EpisodicRecurrentReplayBuffer(ReplayBuffer):
             assert samples_left >= 0
 
         extra_data_dict = {name: np.array(extra_data[i]) for i, name in enumerate(self._extra_data_names)}
-        extra_data_dict["reset"] = np.zeros(shape=(batch_size,))#np.array(resets)
+        extra_data_dict["reset"] = np.zeros(shape=(batch_size,))  # np.array(resets)
         extra_data_dict["state"] = extra_data_dict["state"][::sequence_length]
         extra_data_dict["state_idxs"] = state_idxs
 
-        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), extra_data_dict
+        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(
+            dones), extra_data_dict
 
     def update_state(self, idxs, data):
         for i, (ep_idx, t) in enumerate(idxs):
@@ -344,7 +356,9 @@ class DRRecurrentReplayBuffer(ReplayBuffer):
         if self.her_k > 0:
             num_episodes = len(self._storage)
             ep_idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]
-            ep_ts = [random.randint(self._scan_length * (1 + self.her_k), (len(self._storage[ep_i]) - 1) * (1 + self.her_k)) for ep_i in ep_idxes]  # - self._optim_length)
+            ep_ts = [
+                random.randint(self._scan_length * (1 + self.her_k), (len(self._storage[ep_i]) - 1) * (1 + self.her_k))
+                for ep_i in ep_idxes]  # - self._optim_length)
             return self._encode_sample(ep_idxes, ep_ts)
         else:
             return super(DRRecurrentReplayBuffer, self).sample(batch_size)
@@ -384,7 +398,9 @@ class DRRecurrentReplayBuffer(ReplayBuffer):
             hists_a.extend(hist_a)
             goals.append(np.array(goal, copy=False))
             mys.append(np.array(self._episode_my[ep_i], copy=False))
-        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), {"goal": np.array(goals), "obs_rnn": np.array(hists_o), "action_prev": np.array(hists_a), "my": np.array(mys)}
+        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), {
+            "goal": np.array(goals), "obs_rnn": np.array(hists_o), "action_prev": np.array(hists_a),
+            "my": np.array(mys)}
 
 
 class PrioritizedReplayBuffer(ReplayBuffer):
@@ -471,7 +487,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             weights.append(weight / max_weight)
         weights = np.array(weights)
         encoded_sample = self._encode_sample(idxes)
-        #return tuple(list(encoded_sample) + [weights, idxes])
+        # return tuple(list(encoded_sample) + [weights, idxes])
         return tuple(list(encoded_sample) + {"is_weights": weights, "idxs": idxes})
 
     def update_priorities(self, idxes, priorities):
@@ -648,7 +664,8 @@ class StableReplayBuffer(ReplayBuffer):
 
         scores = np.array(self.scores)
         scores = np.clip(scores, np.percentile(scores, 10), np.percentile(scores, 90))
-        idxs = np.random.choice(np.arange(len(self.scores)), size=(batch_size,), p=scores / np.sum(scores), replace=False)
+        idxs = np.random.choice(np.arange(len(self.scores)), size=(batch_size,), p=scores / np.sum(scores),
+                                replace=False)
 
         return self._encode_sample(idxs)
 

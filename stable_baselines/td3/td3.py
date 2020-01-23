@@ -166,7 +166,7 @@ class TD3(OffPolicyRLModel):
                         if "my_size" in policy_tf_args:
                             policy_tf_kwargs["my_size"] = len(self._get_env_parameters())
                         if "goal_size" in policy_tf_args:
-                            policy_tf_kwargs["goal_size"] = self.env.goal_dim
+                            policy_tf_kwargs["goal_size"] = self.env.goal_dim  # TODO: need to get this some other way or save it
 
                         if self.buffer_kwargs is not None:
                             sequence_length = self.buffer_kwargs.get("sequence_length", 1)
@@ -409,6 +409,7 @@ class TD3(OffPolicyRLModel):
                 states = self.sess.run([self.policy_tf.pi_state, self.policy_tf.qf1_state, self.policy_tf.qf2_state],
                                        feed_dict_scan)
                 batch_extra.update({k: states[i] for i, k in enumerate(["pi_state", "qf1_state", "qf2_state"])})
+            self.replay_buffer.update_state(batch_extra["state_idxs_scan"], states)
 
         feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items()})
 
@@ -484,6 +485,7 @@ class TD3(OffPolicyRLModel):
             if self.recurrent_policy:
                 done = False
                 policy_state = self.policy_tf_act.initial_state
+                prev_policy_state = self.policy_tf_act.initial_state
 
             for step in range(initial_step, total_timesteps):
                 if callback is not None:
@@ -578,6 +580,8 @@ class TD3(OffPolicyRLModel):
                         infos_values = np.mean(mb_infos_vals, axis=0)
 
                 episode_rewards[-1] += reward
+                if self.recurrent_policy:
+                    prev_policy_state = policy_state
                 if done:
                     if isinstance(self.replay_buffer, DiscrepancyReplayBuffer) and n_updates - last_replay_update >= 5000:
                         self.replay_buffer.update_priorities()
