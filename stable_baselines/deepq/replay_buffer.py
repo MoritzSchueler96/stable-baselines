@@ -207,7 +207,10 @@ class RecurrentReplayBuffer(ReplayBuffer):
             if not self._is_full:
                 self._storage.append(self._current_episode_data)
             else:
-                self._storage[self._next_idx] = self._current_episode_data
+                try:
+                    self._storage[self._next_idx] = self._current_episode_data 
+                except IndexError:
+                    self._storage.append(self._current_episode_data)
                 self._next_idx += 1
         else:
             if self.her_k > 0:
