@@ -156,8 +156,8 @@ class RecurrentReplayBuffer(ReplayBuffer):
         self._data_name_to_idx = {"obs": 0, "action": 1, "reward": 2, "obs_tp1": 3, "done": 4,
                                   **{name: 5 + i for i, name in enumerate(self._extra_data_names)}}
         self._current_episode_data = []
-        self._sequence_length = sequence_length
-        assert self._sequence_length >= 1
+        self.sequence_length = sequence_length
+        assert self.sequence_length >= 1
         self.scan_length = scan_length
         self._rnn_inputs = rnn_inputs
         assert self.scan_length == 0 or len(self._rnn_inputs) > 0
@@ -175,7 +175,7 @@ class RecurrentReplayBuffer(ReplayBuffer):
             self.store_episode()
 
     def store_episode(self):
-        if len(self._current_episode_data) >= self._sequence_length + self.scan_length:
+        if len(self._current_episode_data) >= self.sequence_length + self.scan_length:
             if self._sample_cycle >= self.buffer_size:
                 self._next_idx = 0
                 self._sample_cycle = 0
@@ -208,7 +208,7 @@ class RecurrentReplayBuffer(ReplayBuffer):
 
     def sample(self, batch_size, sequence_length=None, **_kwargs):
         if sequence_length is None:
-            sequence_length = self._sequence_length
+            sequence_length = self.sequence_length
         assert batch_size % sequence_length == 0
 
         ep_idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size // sequence_length)]
