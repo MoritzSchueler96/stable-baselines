@@ -657,7 +657,7 @@ class EUM(OffPolicyRLModel):
             mb_infos_vals = []
             start_time = time.time()
 
-            for step in range(initial_step, total_timesteps):
+            for num_steps, step in enumerate(range(initial_step, total_timesteps, self.batch_size)):
                 if callback is not None:
                     # Only stop training if return value is False, not when it is None. This is for backwards
                     # compatibility with callbacks that have no return statement.
@@ -670,7 +670,7 @@ class EUM(OffPolicyRLModel):
                 # Update policy and critics (q functions)
                 # Note: the policy is updated less frequently than the Q functions
                 # this is controlled by the `policy_delay` parameter
-                step_writer = writer if step % self.write_freq == 0 else None
+                step_writer = writer if num_steps % self.write_freq == 0 else None
                 mb_infos_vals.append(
                     self._train_step(step, step_writer, current_lr, step % self.policy_delay == 0))
 
@@ -692,7 +692,7 @@ class EUM(OffPolicyRLModel):
                             logger.logkv(name, val)
                     logger.logkv("total timesteps", self.num_timesteps)
                     logger.dumpkvs()
-                self.num_timesteps += 1
+                self.num_timesteps += self.batch_size
 
         return self
 
