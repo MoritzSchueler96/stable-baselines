@@ -115,7 +115,7 @@ class HERGoalEnvWrapper(object):
         obs, reward, done, info = self.env.step(action)
         obs = self.convert_dict_to_obs(obs)
         if self.norm:
-            self.orig_obs = obs
+            self.orig_obs = np.copy(obs)
             obs = self.normalize_observation(obs, update=True)
         return obs, reward, done, info
 
