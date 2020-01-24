@@ -8,7 +8,7 @@ from stable_baselines.common.segment_tree import SumSegmentTree, MinSegmentTree
 class ReplayBuffer(object):
     __name__ = "ReplayBuffer"
 
-    def __init__(self, size):
+    def __init__(self, size, extra_data_names=()):
         """
         Implements a ring buffer (FIFO).
 
@@ -20,6 +20,7 @@ class ReplayBuffer(object):
         self._next_idx = 0
         self._ep_idx = 0
         self._episode_indices = []
+        self.extra_data_names = sorted(extra_data_names)
 
     def __len__(self):
         return len(self._storage)
@@ -52,7 +53,7 @@ class ReplayBuffer(object):
         """
         return len(self) == self.buffer_size
 
-    def add(self, obs_t, action, reward, obs_tp1, done, bootstrap=None):
+    def add(self, obs_t, action, reward, obs_tp1, done, *extra_data):
         """
         add a new transition to the buffer
 
@@ -63,10 +64,7 @@ class ReplayBuffer(object):
         :param done: (bool) is the episode done
         :param bootstrap (bool or None) should the terminal signal be set to true
         """
-        if bootstrap is None:
-            bootstrap = not done
-
-        data = (obs_t, action, reward, obs_tp1, done, bootstrap)
+        data = (obs_t, action, reward, obs_tp1, done, *extra_data)
 
         if self._next_idx >= len(self._storage):
             self._storage.append(data)
@@ -80,12 +78,13 @@ class ReplayBuffer(object):
             self._ep_idx += 1
 
     def _encode_sample(self, idxes, n_step=1):
-        obses_t, actions, rewards, obses_tp1, dones, bootstraps = [], [], [], [], [], []
+        obses_t, actions, rewards, obses_tp1, dones = [], [], [], [], []
+        extra_data = {k: [] for k in self.extra_data_names}
         if n_step > 1:
             return_steps = []
         for i in idxes:
             data = self._storage[i]
-            obs_t, action, reward, obs_tp1, done, bootstrap = data
+            obs_t, action, reward, obs_tp1, done, *extra_timestep_data = data
             if n_step > 1:
                 steps_taken = 1
                 next_index = (i + steps_taken) % self._maxsize
@@ -102,12 +101,15 @@ class ReplayBuffer(object):
             rewards.append(reward)
             obses_tp1.append(np.array(obs_tp1, copy=False))
             dones.append(done)
-            bootstraps.append(bootstrap)
+            for i, e_data in enumerate(extra_timestep_data):
+                extra_data[self.extra_data_names[i]].append(np.array(e_data, copy=False))
 
         if n_step > 1:
-            return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), np.array(bootstraps), np.array(return_steps)
-        else:
-            return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), np.array(bootstraps)
+            extra_data["n_steps"] = return_steps
+
+        extra_data = {k: np.array(v) for k, v in extra_data.items()}
+
+        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), extra_data
 
     def sample(self, batch_size, n_step=1, **_kwargs):
         """
