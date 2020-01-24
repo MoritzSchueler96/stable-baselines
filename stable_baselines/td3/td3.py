@@ -249,6 +249,8 @@ class TD3(OffPolicyRLModel):
                             self.q_filter_moving_average = deque(maxlen=1000)
                         self.expert_actions_ph = tf.placeholder(tf.float32, shape=(None,) + self.action_space.shape,
                                                             name="expert_actions")
+                        if not self.pretrain_expert:
+                            self.train_extra_phs["expert_actions"] = self.expert_actions_ph
 
                 self.buffer_is_prioritized = self.buffer_type.__name__ in ["PrioritizedReplayBuffer",
                                                                            "RankPrioritizedReplayBuffer"]
@@ -264,15 +266,14 @@ class TD3(OffPolicyRLModel):
                                     {"learning_starts": self.prioritization_starts, "batch_size": self.batch_size})
                             self.replay_buffer = self.buffer_type(**buffer_kw)
                     else:
-                        replay_buffer_kw = {"size": self.buffer_size}
+                        replay_buffer_kw = {"size": self.buffer_size, "extra_data_names": []}
                         if self.buffer_kwargs is not None:
                             replay_buffer_kw.update(self.buffer_kwargs)
                         if self.recurrent_policy:
                             replay_buffer_kw["extra_data_names"] = self.policy_tf.extra_data_names
                             replay_buffer_kw["rnn_inputs"] = self.policy_tf.rnn_inputs
-                            if self.expert is not None and not self.pretrain_expert:
-                                replay_buffer_kw["extra_data_names"].append("expert_actions")
-                                self.train_extra_phs["expert_actions"] = self.expert_actions_ph
+                        if not self.pretrain_expert:
+                            replay_buffer_kw["extra_data_names"].append("expert_actions")
                         self.replay_buffer = self.buffer_type(**replay_buffer_kw)
 
                 if self.recurrent_policy:
@@ -645,6 +646,7 @@ class TD3(OffPolicyRLModel):
             self.active_sampling = False
             initial_step = self.num_timesteps
             episode_data = []
+            done = False
 
             if self.buffer_is_prioritized and \
                     ((replay_wrapper is not None and self.replay_buffer.replay_buffer.__name__ == "ReplayBuffer")
@@ -653,7 +655,6 @@ class TD3(OffPolicyRLModel):
                 self._set_prioritized_buffer()
 
             if self.recurrent_policy:
-                done = False
                 policy_state = self.policy_tf_act.initial_state
                 prev_policy_state = self.policy_tf_act.initial_state
 
