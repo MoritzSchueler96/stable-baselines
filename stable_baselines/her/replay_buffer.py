@@ -77,7 +77,6 @@ class HindsightExperienceReplayWrapper(object):
         self.use_her = False
         self.require_change = require_change
         self.reward_transformation = None
-        self.original_obs = []
 
         if "Recurrent" in replay_buffer.__name__:
             self.recurrent = True
@@ -95,8 +94,6 @@ class HindsightExperienceReplayWrapper(object):
         :param done: (bool) is the episode done
         """
         assert self.replay_buffer is not None
-        if getattr(self.env, "norm", False):
-            self.original_obs.append((extra_data.pop("original_obs", None), extra_data.pop("original_obs_new", None)))
         # Update current episode buffer
         self.episode_transitions.append((obs_t, action, reward, obs_tp1, done if bootstrap is None else not bootstrap, *[extra_data[k] for k in sorted(extra_data)]))
         if self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
@@ -107,20 +104,6 @@ class HindsightExperienceReplayWrapper(object):
             self._store_episode()
             # Reset episode buffer
             self.episode_transitions = []
-            self.original_obs = []
-
-    def sample(self, *args, **kwargs):
-        batch = self.replay_buffer.sample(*args, **kwargs)
-        if self.replay_buffer.__name__ == "RecurrentReplayBuffer" and self.replay_buffer.scan_length > 0 and False:
-            # TODO: i think it is guaranteed that there are always scan_length instances but im not sure
-            obs, next_obs = batch[0], batch[3]
-            sampled_goals = obs[::self.replay_buffer.scan_length + 1, -self.env.goal_dim:]
-            sampled_goals = np.repeat(sampled_goals, self.replay_buffer.scan_length + 1, axis=0)
-            obs[:, -self.env.goal_dim:] = sampled_goals
-            next_obs[:, -self.env.goal_dim:] = sampled_goals
-            batch[0], batch[3] = obs, next_obs
-
-        return batch
 
     def can_sample(self, n_samples):
         """
@@ -131,6 +114,9 @@ class HindsightExperienceReplayWrapper(object):
         :return: (bool)
         """
         return self.replay_buffer.can_sample(n_samples)
+
+    def sample(self, *args, **kwargs):
+        return self.replay_buffer.sample(*args, **kwargs)
 
     def __len__(self):
         return len(self.replay_buffer)
