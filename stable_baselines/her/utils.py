@@ -73,7 +73,7 @@ class HERGoalEnvWrapper(object):
         self.epsilon = 1e-5
         if norm:
             obs_norm_shape = list(self.observation_space.shape)
-            obs_norm_shape[0] -= self.goal_dim
+            obs_norm_shape[-1] -= self.goal_dim
             self.obs_rms = RunningMeanStdSerial(shape=obs_norm_shape)
             self.ret_rms = RunningMeanStdSerial(shape=())
             self.clip_obs = clip_obs
@@ -129,13 +129,13 @@ class HERGoalEnvWrapper(object):
                 is_dict = True
                 obs = self.convert_dict_to_obs(obs)
             if self.training and update:
-                self.obs_rms.update(obs[:-self.goal_dim])
-            obs[:-self.goal_dim] = np.clip((obs[:-self.goal_dim] - self.obs_rms.mean) /
+                self.obs_rms.update(obs[..., :-self.goal_dim])
+            obs[..., :-self.goal_dim] = np.clip((obs[..., :-self.goal_dim] - self.obs_rms.mean) /
                                            np.sqrt(self.obs_rms.var + self.epsilon),
-                                           -self.clip_obs, self.clip_obs)
-            obs[-self.goal_dim:] = np.clip((obs[-self.goal_dim:] - self.obs_rms.mean[-self.goal_dim:]) /
-                                           np.sqrt(self.obs_rms.var[-self.goal_dim:] + self.epsilon),
-                                           -self.clip_obs, self.clip_obs)
+                                           - self.clip_obs, self.clip_obs)
+            obs[..., -self.goal_dim:] = np.clip((obs[..., -self.goal_dim:] - self.obs_rms.mean[..., -self.goal_dim:]) /
+                                           np.sqrt(self.obs_rms.var[..., -self.goal_dim:] + self.epsilon),
+                                           - self.clip_obs, self.clip_obs)
             if is_dict:
                 return self.convert_obs_to_dict(obs)
             else:
@@ -143,14 +143,12 @@ class HERGoalEnvWrapper(object):
         else:
             return obs
 
-    def unnormalize_goal(self, goal, goal_type):
-        if goal_type == "desired":
-            idx_range = (self.obs_dim + self.goal_dim, None)
-        elif goal_type == "achieved":
-            idx_range = (self.obs_dim, self.obs_dim + self.goal_dim)
+    def unnormalize_goal(self, goal):
+        if self.multi_dimensional_obs and len(goal.shape) == 1:
+            idx = 0
         else:
-            raise ValueError
-        return goal * np.sqrt(self.obs_rms.var[idx_range[0]:idx_range[1]] + self.epsilon) + self.obs_rms.mean[idx_range[0]:idx_range[1]]
+            idx = ...
+        return goal * np.sqrt(self.obs_rms.var[idx, -self.goal_dim:] + self.epsilon) + self.obs_rms.mean[idx, -self.goal_dim:]
 
     def unnormalize_observation(self, obs):
         if self.norm:
@@ -158,7 +156,9 @@ class HERGoalEnvWrapper(object):
             if isinstance(obs, dict):
                 is_dict = True
                 obs = self.convert_dict_to_obs(obs)
-            obs = obs * np.sqrt(self.obs_rms.var + self.epsilon) + self.obs_rms.mean
+            obs[..., :-self.goal_dim] = obs[..., :-self.goal_dim] * np.sqrt(self.obs_rms.var + self.epsilon) + self.obs_rms.mean
+            obs[..., -self.goal_dim:] = obs[..., -self.goal_dim:] * np.sqrt(self.obs_rms.var[..., -self.goal_dim:] + self.epsilon)\
+                                        + self.obs_rms.mean[..., -self.goal_dim:]
             if is_dict:
                 return self.convert_obs_to_dict(obs)
             else:
@@ -187,10 +187,8 @@ class HERGoalEnvWrapper(object):
 
     def compute_reward(self, achieved_goal, desired_goal, info):
         if self.norm:
-            achieved_goal = achieved_goal * np.sqrt(self.obs_rms.var[-self.goal_dim:] + self.epsilon) + \
-                            self.obs_rms.mean[-self.goal_dim:]
-            desired_goal = desired_goal * np.sqrt(self.obs_rms.var[-self.goal_dim:] + self.epsilon) + \
-                            self.obs_rms.mean[-self.goal_dim:]
+            achieved_goal = self.unnormalize_goal(achieved_goal)
+            desired_goal = self.unnormalize_goal(desired_goal)
 
         return self.env.compute_reward(achieved_goal, desired_goal, info)
 
