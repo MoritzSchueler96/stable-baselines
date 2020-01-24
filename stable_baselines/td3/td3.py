@@ -270,9 +270,9 @@ class TD3(OffPolicyRLModel):
                         if self.buffer_kwargs is not None:
                             replay_buffer_kw.update(self.buffer_kwargs)
                         if self.recurrent_policy:
-                            replay_buffer_kw["extra_data_names"] = self.policy_tf.extra_data_names
+                            replay_buffer_kw["extra_data_names"].extend(self.policy_tf.extra_data_names)
                             replay_buffer_kw["rnn_inputs"] = self.policy_tf.rnn_inputs
-                        if not self.pretrain_expert:
+                        if self.expert is not None and not self.pretrain_expert:
                             replay_buffer_kw["extra_data_names"].append("expert_actions")
                         self.replay_buffer = self.buffer_type(**replay_buffer_kw)
 
