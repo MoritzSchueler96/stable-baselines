@@ -546,7 +546,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         weights = np.array(weights)
         encoded_sample = self._encode_sample(idxes)
         #return tuple(list(encoded_sample) + [weights, idxes])
-        return tuple(list(encoded_sample) + {"is_weights": weights, "idxs": idxes})
+        return encoded_sample[0], encoded_sample[1], encoded_sample[2], encoded_sample[3], encoded_sample[4],  {"is_weights": weights, "idxs": idxes}
 
     def update_priorities(self, idxes, priorities):
         """

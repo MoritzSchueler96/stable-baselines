@@ -311,9 +311,12 @@ class TD3(OffPolicyRLModel):
 
                     # Compute Q-Function loss
                     if self.buffer_is_prioritized:
-                        self.train_extra_phs["is_weights"] = tf.placeholder(tf.float32, shape=(None, 1), name="is_weights")
-                        qf1_loss = tf.reduce_mean(self.is_weights_ph * (q_backup - qf1) ** 2)
-                        qf2_loss = tf.reduce_mean(self.is_weights_ph * (q_backup - qf2) ** 2)
+                        self.is_weights_ph = tf.placeholder(tf.float32, shape=(None, 1), name="is_weights")
+                        self.train_extra_phs["is_weights"] = self.is_weights_ph
+                        qf1_td_error = tf.abs(q_backup - qf1)
+                        qf2_td_error = tf.abs(q_backup - qf2)
+                        qf1_loss = tf.reduce_mean(self.is_weights_ph * qf1_td_error ** 2)
+                        qf2_loss = tf.reduce_mean(self.is_weights_ph * qf2_td_error ** 2)
                     else:
                         qf1_loss = tf.reduce_mean((q_backup - qf1) ** 2)
                         qf2_loss = tf.reduce_mean((q_backup - qf2) ** 2)
@@ -360,6 +363,8 @@ class TD3(OffPolicyRLModel):
                     # All ops to call during one training step
                     self.step_ops = [qf1_loss, qf2_loss,
                                      qf1, qf2, train_values_op]
+                    if self.buffer_is_prioritized:
+                        self.step_ops.extend([qf1_td_error, qf2_td_error])
 
                     # Monitor losses and entropy in tensorboard
                     tf.summary.scalar("rew_loss", rew_loss)
@@ -390,6 +395,8 @@ class TD3(OffPolicyRLModel):
         if len(batch_extra) > 0:
             batch_extra = batch_extra[0]
 
+        if self.buffer_is_prioritized:
+            batch_extra["is_weights"] = batch_extra["is_weights"].reshape(self.batch_size, -1)
 
         feed_dict = {
             self.observations_ph: batch_obs,
@@ -429,6 +436,10 @@ class TD3(OffPolicyRLModel):
 
         # Unpack to monitor losses
         qf1_loss, qf2_loss, *_values = out
+
+        if self.buffer_is_prioritized:
+            qf1_td_error, qf2_td_error = out[5], out[6]
+            self.replay_buffer.update_priorities(batch_extra["idxs"], qf1_td_error + qf2_td_error)
 
         return qf1_loss, qf2_loss
 
