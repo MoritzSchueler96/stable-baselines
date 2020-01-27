@@ -66,7 +66,7 @@ class TD3(OffPolicyRLModel):
                  random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None,
                  full_tensorboard_log=False, seed=None, n_cpu_tf_sess=None, time_aware=False,
-                 reward_transformation=None):
+                 reward_transformation=None, clip_q_target=None):
         super(TD3, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=TD3Policy, requires_vec_env=False, policy_kwargs=policy_kwargs,
                                   seed=seed, n_cpu_tf_sess=n_cpu_tf_sess)
@@ -125,6 +125,9 @@ class TD3(OffPolicyRLModel):
         self.policy_out = None
         self.policy_train_op = None
         self.policy_loss = None
+
+        self.clip_q_target = clip_q_target
+        assert clip_q_target is None or len(clip_q_target) == 2
 
         self.recurrent_policy = getattr(self.policy, "recurrent", False)
         if self.recurrent_policy:
@@ -318,6 +321,9 @@ class TD3(OffPolicyRLModel):
                         self.rewards_ph +
                         (1 - self.terminals_ph) * self.gamma * min_qf_target
                     )
+
+                    if self.clip_q_target is not None:
+                        q_backup = tf.clip_by_value(q_backup, self.clip_q_target[0], self.clip_q_target[1], name="q_backup_clipped")
 
                     # Compute Q-Function loss
                     if self.buffer_is_prioritized:
