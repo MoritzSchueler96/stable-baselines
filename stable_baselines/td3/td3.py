@@ -265,6 +265,8 @@ class TD3(OffPolicyRLModel):
                         qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph,
                                                                 policy_out, reuse=True)
 
+                self.qf1, self.qf2, self.qf1_pi, self.qf2_pi = qf1, qf2, qf1_pi, qf2_pi
+
                 with tf.variable_scope("target", reuse=False):
                     if self.recurrent_policy:
                         # Create target networks
