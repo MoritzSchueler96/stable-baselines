@@ -756,7 +756,7 @@ class TD3(OffPolicyRLModel):
 
                 # Retrieve reward and episode length if using Monitor wrapper
                 maybe_ep_info = info.get('episode')
-                if maybe_ep_info is not None:
+                if maybe_ep_info is not None and self.num_timesteps >= self.learning_starts:
                     ep_info_buf.extend([maybe_ep_info])
 
                 if writer is not None:
