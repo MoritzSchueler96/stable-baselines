@@ -645,7 +645,7 @@ class TD3(OffPolicyRLModel):
                     infos_values = []
             return self
 
-    def batch_learn(self, total_timesteps, dataset, log_interval=None, callback=None, seed=None, tb_log_name="TD3", reset_num_timesteps=True):
+    def batch_learn(self, total_timesteps, dataset, log_interval=None, callback=None, seed=None, tb_log_name="TD3", reset_num_timesteps=True, q_viz_freq=None):
         new_tb_log = self._init_num_timesteps(reset_num_timesteps)
 
         with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
@@ -683,7 +683,7 @@ class TD3(OffPolicyRLModel):
                 # this is controlled by the `policy_delay` parameter
                 step_writer = writer if num_steps % self.write_freq == 0 else None
                 mb_infos_vals.append(
-                    self._train_step(step, step_writer, current_lr, step % self.policy_delay == 0))
+                    self._train_step(step, step_writer, current_lr, num_steps % self.policy_delay == 0, viz=q_viz_freq is not None and num_steps % q_viz_freq == 0))
 
                 # Log losses and entropy, useful for monitor training
 
