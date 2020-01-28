@@ -1,6 +1,6 @@
 from collections import OrderedDict
 
-from stable_baselines.common.running_mean_std import RunningMeanStdSerial
+from stable_baselines.common.running_mean_std import RunningMeanStdSerial, RunningMeanStd
 import pickle
 
 import numpy as np
@@ -73,10 +73,11 @@ class HERGoalEnvWrapper(object):
         self.epsilon = 1e-5
         if norm:
             obs_norm_shape = list(self.observation_space.shape)
-            obs_norm_shape[0] -= self.goal_dim
-            self.obs_rms = RunningMeanStdSerial(shape=obs_norm_shape)
-            self.ret_rms = RunningMeanStdSerial(shape=())
+            obs_norm_shape[-1] -= self.goal_dim  # TODO: if multidim only one time entry should be used and then applied to the others (or at least support for this should be added)
+            self.obs_rms = RunningMeanStd(shape=obs_norm_shape)
+            self.ret_rms = RunningMeanStd(shape=())
             self.clip_obs = clip_obs
+            self.ep_obs_data = []
 
     def convert_dict_to_obs(self, obs_dict):
         """
@@ -115,8 +116,11 @@ class HERGoalEnvWrapper(object):
         obs, reward, done, info = self.env.step(action)
         obs = self.convert_dict_to_obs(obs)
         if self.norm:
-            self.orig_obs = obs
-            obs = self.normalize_observation(obs)
+            self.orig_obs = np.copy(obs)
+            obs = self.normalize_observation(obs, update=True)
+        if done:
+            self.obs_rms.update(np.stack(self.ep_obs_data, axis=0))
+            self.ep_obs_data = []
         return obs, reward, done, info
 
     def normalize_observation(self, obs):
@@ -128,9 +132,9 @@ class HERGoalEnvWrapper(object):
             if isinstance(obs, dict):
                 is_dict = True
                 obs = self.convert_dict_to_obs(obs)
-            if self.training:
-                self.obs_rms.update(obs[:-self.goal_dim])
-            obs[:-self.goal_dim] = np.clip((obs[:-self.goal_dim] - self.obs_rms.mean) /
+            if self.training and update:
+                self.ep_obs_data.append(obs[..., :-self.goal_dim])
+            obs[..., :-self.goal_dim] = np.clip((obs[..., :-self.goal_dim] - self.obs_rms.mean) /
                                            np.sqrt(self.obs_rms.var + self.epsilon),
                                            -self.clip_obs, self.clip_obs)
             obs[-self.goal_dim:] = np.clip((obs[-self.goal_dim:] - self.obs_rms.mean[-self.goal_dim:]) /
@@ -172,8 +176,8 @@ class HERGoalEnvWrapper(object):
     def reset(self, *args, **kwargs):
         obs = self.convert_dict_to_obs(self.env.reset(*args, **kwargs))
         if self.norm:
-            self.orig_obs = obs
-            obs = self.normalize_observation(obs)
+            self.orig_obs = np.copy(obs)
+            obs = self.normalize_observation(obs, update=True)
 
         return obs
 
