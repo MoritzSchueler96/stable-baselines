@@ -123,7 +123,7 @@ class HERGoalEnvWrapper(object):
             self.ep_obs_data = []
         return obs, reward, done, info
 
-    def normalize_observation(self, obs):
+    def normalize_observation(self, obs, update):
         """
         :param obs: (numpy tensor)
         """
