@@ -201,8 +201,8 @@ class HERGoalEnvWrapper(object):
     def close(self):
         return self.env.close()
 
-    #def __getattr__(self, item):
-    #    return getattr(self.env, item)
+    def __getattr__(self, item):
+        return getattr(self.env, item)
 
     def save_running_average(self, path, suffix=None):
         """
