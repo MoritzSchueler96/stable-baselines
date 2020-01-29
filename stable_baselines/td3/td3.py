@@ -534,7 +534,7 @@ class TD3(OffPolicyRLModel):
             self.actions_ph: batch_actions,
             self.next_observations_ph: batch_next_obs,
             self.rewards_ph: batch_rewards.reshape(self.batch_size, -1),
-            self.terminals_ph: ~batch_dones.reshape(self.batch_size, -1),
+            self.terminals_ph: batch_dones.reshape(self.batch_size, -1),
             self.learning_rate_ph: learning_rate
         }
 

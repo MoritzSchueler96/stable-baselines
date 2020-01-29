@@ -19,7 +19,7 @@ class ReplayBuffer(object):
         self._maxsize = int(size)
         self._next_idx = 0
         self._ep_idx = 0
-        self._episode_indices = []
+        self._episode_indices = []  # TODO: does not work with bootstrapping (i.e. time aware)
         self.extra_data_names = sorted(extra_data_names)
 
     def __len__(self):
