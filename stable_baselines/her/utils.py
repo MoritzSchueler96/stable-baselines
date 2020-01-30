@@ -118,9 +118,9 @@ class HERGoalEnvWrapper(object):
         if self.norm:
             self.orig_obs = np.copy(obs)
             obs = self.normalize_observation(obs, update=True)
-        if done:
-            self.obs_rms.update(np.stack(self.ep_obs_data, axis=0))
-            self.ep_obs_data = []
+            if done:
+                self.obs_rms.update(np.stack(self.ep_obs_data, axis=0))
+                self.ep_obs_data = []
         return obs, reward, done, info
 
     def normalize_observation(self, obs, update):
