@@ -203,7 +203,8 @@ class RecurrentReplayBuffer(ReplayBuffer):
                         extra_data[extra_data_name].append(np.array(data, copy=False))
 
         extra_data = {k: np.array(v) for k, v in extra_data.items()}
-        extra_data["state"] = extra_data["state"][::sequence_length]
+        for state_data_name in [name for name in self._extra_data_names if "state" in name]:
+            extra_data[state_data_name] = extra_data[state_data_name][::sequence_length]
         extra_data["state_idxs"] = list(zip(ep_idxes, [t + sequence_length for t in ep_ts]))
         if self.scan_length > 0:
             extra_data["state_idxs_scan"] = list(zip(ep_idxes, ep_ts))
@@ -213,12 +214,8 @@ class RecurrentReplayBuffer(ReplayBuffer):
     def update_state(self, idxs, data):
         for i, (ep_idx, t) in enumerate(idxs):
             try:
-                if isinstance(data, list):
-                    self.storage[ep_idx][t][self._data_name_to_idx["pi_state"]] = data[0][i, :]
-                    self.storage[ep_idx][t][self._data_name_to_idx["qf1_state"]] = data[1][i, :]
-                    self.storage[ep_idx][t][self._data_name_to_idx["qf2_state"]] = data[2][i, :]
-                else:
-                    self.storage[ep_idx][t][self._data_name_to_idx["state"]] = data[i, :]
+                for state_name, state_val in data.items():
+                    self.storage[ep_idx][t][self._data_name_to_idx[state_name]] = state_val[i, :]
             except IndexError:  # Hidden state computed for last sample in episode, doesnt belong to any sample
                 pass
 
