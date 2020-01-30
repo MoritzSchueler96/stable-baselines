@@ -463,22 +463,17 @@ class DRPolicy(RecurrentPolicy):
             if self.share_lstm:
                 data["state"] = _locals["prev_policy_state"][0, :]
             else:
-                data["pi_state"] = _locals["policy_state"][0, :]  # TODO: fix this, should be h_t-1 not h_t
+                data["pi_state"] = _locals["prev_policy_state"][0, :]
                 if len(_locals["episode_data"]) == 0:
-                    qf1_state_prev, qf2_state_prev = self.initial_state, self.initial_state
-                    action_prev = np.zeros(self.ac_space.shape)
+                    qf1_state, qf2_state = self.initial_state, self.initial_state
                 else:
-                    qf1_state_prev = _locals["episode_data"][-1].get("qf1_state", self.initial_state)[None]
-                    qf2_state_prev = _locals["episode_data"][-1].get("qf2_state", self.initial_state)[None]
-                    action_prev = _locals["episode_data"][-1]["action"]
-
-                qf1_state, qf2_state = self.sess.run([self.qf1_state, self.qf2_state], feed_dict={
-                    self.processed_obs: _locals["obs"][None],
-                    self.action_prev_rnn_ph: action_prev[None],
-                    self.qf1_state_ph: qf1_state_prev,
-                    self.qf2_state_ph: qf2_state_prev,
-                    self.dones_ph: np.array(_locals["done"])[None]
-                })
+                    qf1_state, qf2_state = self.sess.run([self.qf1_state, self.qf2_state], feed_dict={
+                        self.processed_obs: _locals["episode_data"][-1]["obs"][None],
+                        self.action_prev_rnn_ph: _locals["episode_data"][-1]["action_prev_rnn"][None],
+                        self.qf1_state_ph: _locals["episode_data"][-1]["qf1_state"][None],
+                        self.qf2_state_ph: _locals["episode_data"][-1]["qf2_state"][None],
+                        self.dones_ph: np.array(_locals["episode_data"][-1]["done"])[None]
+                    })
                 data["qf1_state"] = qf1_state[0, :]
                 data["qf2_state"] = qf2_state[0, :]
 

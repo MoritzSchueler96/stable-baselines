@@ -563,14 +563,14 @@ class TD3(OffPolicyRLModel):
                                        for k, v in batch_extra.items() if "scan_" in k})
                 if self.policy_tf.share_lstm:
                     states = self.sess.run(self.policy_tf.state, feed_dict_scan)
-                    batch_extra["state"] = states
+                    updated_states = {"state": states}
                 else:
                     states = self.sess.run([self.policy_tf.pi_state, self.policy_tf.qf1_state, self.policy_tf.qf2_state],
                                            feed_dict_scan)
-
-                batch_extra.update({k: states[i] for i, k in enumerate(["pi_state", "qf1_state", "qf2_state"])})
+                    updated_states = {k: states[i] for i, k in enumerate(["pi_state", "qf1_state", "qf2_state"])}
+                batch_extra.update(updated_states)
                 self.replay_buffer.update_state([(idx[0], idx[1] - self.scan_length + self.sequence_length * seq_i)
-                                                 for idx in batch_extra["state_idxs_scan"]], states)
+                                                 for idx in batch_extra["state_idxs_scan"]], updated_states)
 
         feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items()})
 
@@ -595,9 +595,9 @@ class TD3(OffPolicyRLModel):
 
         if self.recurrent_policy:
             if self.policy_tf.share_lstm:
-                states = out[5]
+                states = {"state": out[5]}
             else:
-                states = out[5:8]
+                states = {k: out[5+i] for i, k in enumerate(["pi_state", "qf1_state", "qf2_state"])}
             self.replay_buffer.update_state(batch_extra["state_idxs"], states)
 
         # Unpack to monitor losses
@@ -656,7 +656,7 @@ class TD3(OffPolicyRLModel):
 
             if self.recurrent_policy:
                 policy_state = self.policy_tf_act.initial_state
-                prev_policy_state = self.policy_tf_act.initial_state
+                prev_policy_state = self.policy_tf_act.initial_state  # Keep track of this so it doesnt have to be recalculated when saving it to replay buffer
 
             if self.q_filter_scale_noise and len(self.q_filter_moving_average) == 0:
                 self.q_filter_moving_average.append(1)
@@ -809,6 +809,8 @@ class TD3(OffPolicyRLModel):
 
                     episode_data = []
                     episode_rewards.append(0.0)
+                    if self.recurrent_policy:
+                        prev_policy_state = self.policy_tf_act.initial_state
 
                     maybe_is_success = info.get('is_success')
                     if maybe_is_success is not None:
