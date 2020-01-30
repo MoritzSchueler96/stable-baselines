@@ -579,6 +579,50 @@ class LstmFFMlpPolicy(RecurrentPolicy):
         return self.pi_initial_state
 
 
+class ConcavePolicy(FeedForwardPolicy):
+    """
+    Policy object that implements a DDPG-like actor critic, using a feed forward neural network.
+
+    :param sess: (TensorFlow session) The current TensorFlow session
+    :param ob_space: (Gym Space) The observation space of the environment
+    :param ac_space: (Gym Space) The action space of the environment
+    :param n_env: (int) The number of environments to run
+    :param n_steps: (int) The number of steps to run for each environment
+    :param n_batch: (int) The number of batch to run (n_envs * n_steps)
+    :param reuse: (bool) If the policy is reusable or not
+    :param layers: ([int]) The size of the Neural network for the policy (if None, default to [64, 64])
+    :param cnn_extractor: (function (TensorFlow Tensor, ``**kwargs``): (TensorFlow Tensor)) the CNN feature extraction
+    :param feature_extraction: (str) The feature extraction type ("cnn" or "mlp")
+    :param layer_norm: (bool) enable layer normalisation
+    :param act_fun: (tf.func) the activation function to use in the neural network.
+    :param kwargs: (dict) Extra keyword arguments for the nature CNN feature extraction
+    """
+
+    def __init__(self, sess, ob_space, ac_space, n_env=1, n_steps=1, n_batch=None, reuse=False, feature_extraction="mlp", **kwargs):
+        super().__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=reuse,
+                         feature_extraction=feature_extraction, **kwargs)
+
+    def make_actor(self, obs=None, reuse=False, scope="pi"):
+        return super().make_actor(obs, reuse, scope)
+
+    def make_critics(self, obs=None, action=None, reuse=False, scope="values_fn"):
+        self.qf1, self.qf2 = super().make_critics(obs, action, reuse, scope)
+        with tf.variable_scope(scope, reuse=reuse):
+            for qf_i in range(1, 3):
+                with tf.variable_scope("qf{}".format(qf_i), reuse=reuse):
+                    actions_centered = []
+                    for action_dim in range(action.shape[-1]):
+                        b = tf.Variable(tf.zeros([1], dtype=np.float32), name="qf{}_adim{}_bias".format(qf_i, action_dim))
+                        actions_centered.append(tf.subtract(action[:, action_dim], b))
+                    action_func = tf.reduce_sum(actions_centered, axis=-1)
+                    setattr(self, "qf{}".format(qf_i), -tf.square(action_func) + getattr(self, "qf{}".format(qf_i)))
+
+        return self.qf1, self.qf2
+
+    def step(self, obs, state=None, mask=None):
+        return self.sess.run(self.policy, {self.obs_ph: obs})
+
+
 class CnnPolicy(FeedForwardPolicy):
     """
     Policy object that implements actor critic, using a CNN (the nature CNN)
@@ -682,3 +726,4 @@ register_policy("LnCnnPolicy", LnCnnPolicy)
 register_policy("MlpPolicy", MlpPolicy)
 register_policy("LnMlpPolicy", LnMlpPolicy)
 register_policy("CnnMlpPolicy", CnnMlpPolicy)
+register_policy("ConcavePolicy", ConcavePolicy)
