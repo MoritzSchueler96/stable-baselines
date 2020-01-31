@@ -188,7 +188,7 @@ class TD3(OffPolicyRLModel):
                                                             **self.policy_kwargs)
 
                         # TODO: litta hack
-                        if self.policy_tf.share_lstm:
+                        if self.policy_tf.share_rnn:
                             self.target_policy_tf.state_ph = self.policy_tf.state_ph
                         else:
                             self.target_policy_tf.pi_state_ph = self.policy_tf.pi_state_ph
@@ -364,7 +364,7 @@ class TD3(OffPolicyRLModel):
                     self.step_ops = [qf1_loss, qf2_loss,
                                      qf1, qf2, train_values_op]
                     if self.recurrent_policy:
-                        if self.policy_tf.share_lstm:
+                        if self.policy_tf.share_rnn:
                             self.step_ops.append(self.policy_tf.state)
                         else:
                             self.step_ops.extend([self.policy_tf.pi_state, self.policy_tf.qf1_state, self.policy_tf.qf2_state])
@@ -415,7 +415,7 @@ class TD3(OffPolicyRLModel):
                 feed_dict_scan = {self.observations_ph: obs_scan[seq_data_idxs]}
                 feed_dict_scan.update({self.train_extra_phs[k.replace("scan_", "")]: v[seq_data_idxs]
                                        for k, v in batch_extra.items() if "scan_" in k})
-                if self.policy_tf.share_lstm:
+                if self.policy_tf.share_rnn:
                     states = self.sess.run(self.policy_tf.state, feed_dict_scan)
                     updated_states = {"state": states}
                 else:
@@ -443,7 +443,7 @@ class TD3(OffPolicyRLModel):
             out = self.sess.run(step_ops, feed_dict)
 
         if self.recurrent_policy:
-            if self.policy_tf.share_lstm:
+            if self.policy_tf.share_rnn:
                 states = {"state": out[5]}
             else:
                 states = {k: out[5+i] for i, k in enumerate(["pi_state", "qf1_state", "qf2_state"])}
