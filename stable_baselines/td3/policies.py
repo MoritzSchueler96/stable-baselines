@@ -356,8 +356,29 @@ class RecurrentPolicy(TD3Policy):
     def initial_state(self):
         return self._initial_state
 
-    def collect_data(self, _locals, _globals):
-        raise NotImplementedError
+    def collect_data(self, _locals, _globals, qf_data=None):
+        data = {}
+        if self.save_state:
+            if self.share_lstm:
+                data["state"] = _locals["prev_policy_state"][0, :]
+            else:
+                data["pi_state"] = _locals["prev_policy_state"][0, :]
+                if len(_locals["episode_data"]) == 0:
+                    qf1_state, qf2_state = self.initial_state, self.initial_state
+                else:
+                    qf_feed_dict = {
+                        self.processed_obs: _locals["episode_data"][-1]["obs"][None],
+                        self.qf1_state_ph: _locals["episode_data"][-1]["qf1_state"][None],
+                        self.qf2_state_ph: _locals["episode_data"][-1]["qf2_state"][None],
+                        self.dones_ph: np.array(_locals["episode_data"][-1]["done"])[None]
+                    }
+                    if qf_data is not None:
+                        qf_feed_dict.update(qf_data)
+                    qf1_state, qf2_state = self.sess.run([self.qf1_state, self.qf2_state], feed_dict=qf_feed_dict)
+                data["qf1_state"] = qf1_state[0, :]
+                data["qf2_state"] = qf2_state[0, :]
+
+        return data
 
 
 class DRPolicy(RecurrentPolicy):
@@ -456,31 +477,17 @@ class DRPolicy(RecurrentPolicy):
 
         return action, out_state
 
-    def collect_data(self, _locals, _globals):
+    def collect_data(self, _locals, _globals, **kwargs):
         data = {}
-
-        if self.save_state:
-            if self.share_lstm:
-                data["state"] = _locals["prev_policy_state"][0, :]
-            else:
-                data["pi_state"] = _locals["prev_policy_state"][0, :]
-                if len(_locals["episode_data"]) == 0:
-                    qf1_state, qf2_state = self.initial_state, self.initial_state
-                else:
-                    qf1_state, qf2_state = self.sess.run([self.qf1_state, self.qf2_state], feed_dict={
-                        self.processed_obs: _locals["episode_data"][-1]["obs"][None],
-                        self.action_prev_rnn_ph: _locals["episode_data"][-1]["action_prev_rnn"][None],
-                        self.qf1_state_ph: _locals["episode_data"][-1]["qf1_state"][None],
-                        self.qf2_state_ph: _locals["episode_data"][-1]["qf2_state"][None],
-                        self.dones_ph: np.array(_locals["episode_data"][-1]["done"])[None]
-                    })
-                data["qf1_state"] = qf1_state[0, :]
-                data["qf2_state"] = qf2_state[0, :]
-
         if len(_locals["episode_data"]) == 0:
             data["action_prev_rnn"] = np.zeros(self.ac_space.shape)
+            qf_extra_data = {self.action_prev_rnn_ph: np.zeros(self.ac_space.shape)}
         else:
             data["action_prev_rnn"] = _locals["episode_data"][-1]["action"]
+            qf_extra_data = {self.action_prev_rnn_ph: _locals["episode_data"][-1]["action_prev_rnn"][None]}
+
+        data.update(super().collect_data(_locals, _globals, qf_data=qf_extra_data if self.save_state else None))
+
         if "my" not in _locals or _locals["ep_data"]:
             data["my"] = _locals["self"].env.get_env_parameters()
         data["target_action_prev_rnn"] = _locals["action"]
