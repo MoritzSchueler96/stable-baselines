@@ -538,13 +538,13 @@ class LstmMlpPolicy(RecurrentPolicy):
     def step(self, obs, action_prev=None, state=None, mask=None):
         if state is None:
             state = self.initial_state
+        if mask is None:
+            mask = np.array([False])
         if action_prev is None:
             assert obs.shape[0] == 1
             if mask[0]:
                 self.action_prev = np.zeros((1, *self.ac_space.shape))
             action_prev = self.action_prev
-        if mask is None:
-            mask = np.array([False])
 
         return self.sess.run([self.policy, self.pi_state],
                              {self.obs_ph: obs, self.action_prev_ph: action_prev,
@@ -584,13 +584,13 @@ class LstmFFMlpPolicy(RecurrentPolicy):
     def step(self, obs, action_prev=None, state=None, mask=None):
         if state is None:
             state = self.initial_state
+        if mask is None:
+            mask = np.array([False])
         if action_prev is None:
             assert obs.shape[0] == 1
             if mask[0]:
                 self.action_prev = np.zeros((1, *self.ac_space.shape))
             action_prev = self.action_prev
-        if mask is None:
-            mask = np.array([False])
 
         return self.sess.run([self.policy, self.pi_state],
                              {self.obs_ph: obs, self.action_prev_ph: action_prev,
