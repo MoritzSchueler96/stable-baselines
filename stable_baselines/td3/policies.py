@@ -22,8 +22,10 @@ class TD3Policy(BasePolicy):
     :param scale: (bool) whether or not to scale the input
     """
 
-    def __init__(self, sess, ob_space, ac_space, n_env=1, n_steps=1, n_batch=None, reuse=False, scale=False):
-        super(TD3Policy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=reuse, scale=scale)
+    def __init__(self, sess, ob_space, ac_space, n_env=1, n_steps=1, n_batch=None, reuse=False, scale=False,
+                 add_action_ph=False):
+        super(TD3Policy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=reuse, scale=scale,
+                                        add_action_ph=add_action_ph)
         assert isinstance(ac_space, Box), "Error: the action space must be of type gym.spaces.Box"
         assert (np.abs(ac_space.low) == ac_space.high).all(), "Error: the action space low and high must be symmetric"
 
@@ -207,7 +209,7 @@ class RecurrentPolicy(TD3Policy):
                  cnn_extractor=nature_cnn, feature_extraction="mlp", n_lstm=128, share_lstm=False, save_state=False,
                  layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
         super(RecurrentPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch,
-                                                reuse=reuse,
+                                                reuse=reuse, add_action_ph=True,
                                                 scale=(feature_extraction == "cnn" and cnn_extractor == nature_cnn))
 
         self._kwargs_check(feature_extraction, kwargs)
@@ -223,6 +225,7 @@ class RecurrentPolicy(TD3Policy):
         self.activ_fn = act_fun
         self.n_lstm = n_lstm
         self.share_lstm = share_lstm
+        self._obs_ph = self.processed_obs
 
         assert self.n_batch % self.n_steps == 0, "The batch size must be a multiple of sequence length (n_steps)"
         self._lstm_n_batch = self.n_batch // self.n_steps
@@ -256,6 +259,18 @@ class RecurrentPolicy(TD3Policy):
             else:
                 self.extra_data_names = ["pi_state", "qf1_state", "qf2_state"]
                 self.extra_phs = ["pi_state", "qf1_state", "qf2_state"]
+
+    def _process_phs(self, **phs):
+        for ph_name, ph_val in phs.items():
+            if ph_val is None:
+                phs[ph_name] = getattr(self, ph_name + "_ph")
+            else:
+                try:
+                    setattr(self, ph_name + "_ph", ph_val)
+                except AttributeError:
+                    setattr(self, "_" + ph_name + "_ph", ph_val)
+
+        return phs.values()
 
     def _make_branch(self, branch_name, input_tensor, dones=None, state_ph=None):
         if branch_name == "lstm":
@@ -356,7 +371,7 @@ class RecurrentPolicy(TD3Policy):
     def initial_state(self):
         return self._initial_state
 
-    def collect_data(self, _locals, _globals, qf_data=None):
+    def collect_data(self, _locals, _globals):
         data = {}
         if self.save_state:
             if self.share_lstm:
@@ -367,13 +382,11 @@ class RecurrentPolicy(TD3Policy):
                     qf1_state, qf2_state = self.initial_state, self.initial_state
                 else:
                     qf_feed_dict = {
-                        self.processed_obs: _locals["episode_data"][-1]["obs"][None],
                         self.qf1_state_ph: _locals["episode_data"][-1]["qf1_state"][None],
                         self.qf2_state_ph: _locals["episode_data"][-1]["qf2_state"][None],
-                        self.dones_ph: np.array(_locals["episode_data"][-1]["done"])[None]
                     }
-                    if qf_data is not None:
-                        qf_feed_dict.update(qf_data)
+                    qf_feed_dict.update({getattr(self, data_name + "_ph"): _locals["episode_data"][-1][data_name][None]
+                                         for data_name in self.rnn_inputs})
                     qf1_state, qf2_state = self.sess.run([self.qf1_state, self.qf2_state], feed_dict=qf_feed_dict)
                 data["qf1_state"] = qf1_state[0, :]
                 data["qf2_state"] = qf2_state[0, :]
@@ -478,16 +491,11 @@ class DRPolicy(RecurrentPolicy):
         return action, out_state
 
     def collect_data(self, _locals, _globals, **kwargs):
-        data = {}
+        data = super().collect_data(_locals, _globals)
         if len(_locals["episode_data"]) == 0:
             data["action_prev_rnn"] = np.zeros(self.ac_space.shape)
-            qf_extra_data = {self.action_prev_rnn_ph: np.zeros(self.ac_space.shape)}
         else:
             data["action_prev_rnn"] = _locals["episode_data"][-1]["action"]
-            qf_extra_data = {self.action_prev_rnn_ph: _locals["episode_data"][-1]["action_prev_rnn"][None]}
-
-        data.update(super().collect_data(_locals, _globals, qf_data=qf_extra_data if self.save_state else None))
-
         if "my" not in _locals or _locals["ep_data"]:
             data["my"] = _locals["self"].env.get_env_parameters()
         data["target_action_prev_rnn"] = _locals["action"]
@@ -503,7 +511,7 @@ class LstmMlpPolicy(RecurrentPolicy):
                  cnn_extractor=nature_cnn, feature_extraction="mlp", n_lstm=128, share_lstm=False,
                  layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
         if layers is None:
-            layers = {"ff": None, "lstm": [], "head": [256, 128]}
+            layers = {"ff": None, "lstm": [64, 64], "head": []}
         else:
             assert layers["ff"] is None
         super().__init__(sess, ob_space, ac_space, layers, n_env, n_steps, n_batch,
@@ -512,19 +520,17 @@ class LstmMlpPolicy(RecurrentPolicy):
                          share_lstm=share_lstm, layer_norm=layer_norm, act_fun=act_fun,
                          obs_module_indices=obs_module_indices, **kwargs)
 
+        self.rnn_inputs = sorted(self.rnn_inputs + ["obs", "action"])
+
     def make_actor(self, obs=None, dones=None, reuse=False, scope="pi"):
-        if obs is None:
-            obs = self.processed_obs
+        obs, dones = self._process_phs(obs=obs, dones=dones)
 
         ff_phs = None
         rnn_phs = [obs]
         return super().make_actor(ff_phs=ff_phs, rnn_phs=rnn_phs, dones=dones, reuse=reuse, scope=scope)
 
     def make_critics(self, obs=None, action=None, dones=None, reuse=False, scope="values_fn"):
-        if obs is None:
-            obs = self.processed_obs
-        if action is None:
-            action = self.action_ph
+        obs, action, dones = self._process_phs(obs=obs, action=action, dones=dones)
 
         ff_phs = None
         rnn_phs = [obs, action]
@@ -548,7 +554,7 @@ class LstmFFMlpPolicy(RecurrentPolicy):
                  cnn_extractor=nature_cnn, feature_extraction="mlp", n_lstm=128, share_lstm=False,
                  layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
         if layers is None:
-            layers = {"ff": [], "lstm": [], "head": [64, 64]}
+            layers = {"ff": [64], "lstm": [64, 64], "head": []}
 
         super().__init__(sess, ob_space, ac_space, layers, n_env, n_steps, n_batch,
                          reuse=reuse, cnn_extractor=cnn_extractor,
@@ -556,19 +562,17 @@ class LstmFFMlpPolicy(RecurrentPolicy):
                          share_lstm=share_lstm, layer_norm=layer_norm, act_fun=act_fun,
                          obs_module_indices=obs_module_indices, **kwargs)
 
+        self.rnn_inputs = sorted(self.rnn_inputs + ["obs"])
+
     def make_actor(self, obs=None, dones=None, reuse=False, scope="pi"):
-        if obs is None:
-            obs = self.processed_obs
+        obs, dones = self._process_phs(obs=obs, dones=dones)
 
         ff_phs = [obs]
         rnn_phs = [obs]
         return super().make_actor(ff_phs=ff_phs, rnn_phs=rnn_phs, dones=dones, reuse=reuse, scope=scope)
 
     def make_critics(self, obs=None, action=None, dones=None, reuse=False, scope="values_fn"):
-        if obs is None:
-            obs = self.processed_obs
-        if action is None:
-            action = self.action_ph
+        obs, action, dones = self._process_phs(obs=obs, action=action, dones=dones)
 
         ff_phs = [obs, action]
         rnn_phs = [obs, action]
