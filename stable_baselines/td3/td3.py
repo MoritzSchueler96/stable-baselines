@@ -439,8 +439,9 @@ class TD3(OffPolicyRLModel):
                                            feed_dict_scan)
                     updated_states = {k: states[i] for i, k in enumerate(["pi_state", "qf1_state", "qf2_state"])}
                 batch_extra.update(updated_states)
-                self.replay_buffer.update_state([(idx[0], idx[1] - self.scan_length + self.sequence_length * seq_i)
-                                                 for idx in batch_extra["state_idxs_scan"]], updated_states)
+                if self.policy_tf.save_state:
+                    self.replay_buffer.update_state([(idx[0], idx[1] - self.scan_length + self.sequence_length * seq_i)
+                                                     for idx in batch_extra["state_idxs_scan"]], updated_states)
 
         feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items()})
 
@@ -458,7 +459,7 @@ class TD3(OffPolicyRLModel):
         else:
             out = self.sess.run(step_ops, feed_dict)
 
-        if self.recurrent_policy:
+        if self.recurrent_policy and self.policy_tf.save_state:
             if self.policy_tf.share_lstm:
                 states = {"state": out[5]}
             else:
