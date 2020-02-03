@@ -224,6 +224,8 @@ class RecurrentPolicy(TD3Policy):
         self.layers = layers
         self.obs_module_indices = obs_module_indices
         self.rnn_type = rnn_type
+        self.keras_reuse = False
+        self._rnn_layer = {"pi": None, "qf1": None, "qf2": None}
 
         self.activ_fn = act_fun
         self.n_rnn = n_rnn
@@ -288,10 +290,16 @@ class RecurrentPolicy(TD3Policy):
                                            layer_norm=self.layer_norm)
                 input_tensor = seq_to_batch(input_tensor)
             elif self.rnn_type == "larnn":
-                larnn_cell = LinearAntisymmetricCell(self.n_rnn, step_size=0.05) # TODO: get step size as argument (equal to env step size)
                 n_features = input_tensor.shape[-1].value
-                larnn_layer = tf.keras.layers.RNN(larnn_cell, return_state=True, input_shape=(self._rnn_n_batch, self.n_steps, n_features))
-                input_tensor = tf.reshape(input_tensor, (self._rnn_n_batch, self.n_steps, n_features))
+                var_scope_name = tf.get_variable_scope().original_name_scope.split("/")[-2].split("_")[0]
+                if self._rnn_layer[var_scope_name] is None:
+                    larnn_cell = LinearAntisymmetricCell(self.n_rnn, step_size=self._rnn_epsilon)
+                    larnn_layer = tf.keras.layers.RNN(larnn_cell, return_state=True,
+                                                      input_shape=(None, self.n_steps, n_features))
+                    self._rnn_layer[var_scope_name] = larnn_layer
+                else:
+                    larnn_layer = self._rnn_layer[var_scope_name]
+                input_tensor = tf.reshape(input_tensor, (-1, self.n_steps, n_features))
                 input_tensor, state = larnn_layer(input_tensor, initial_state=state_ph)
             else:
                 raise ValueError
@@ -387,7 +395,7 @@ class RecurrentPolicy(TD3Policy):
     def collect_data(self, _locals, _globals):
         data = {}
         if self.save_state:
-            if self.share_lstm:
+            if self.share_rnn:
                 data["state"] = _locals["prev_policy_state"][0, :]
             else:
                 data["pi_state"] = _locals["prev_policy_state"][0, :]
@@ -524,7 +532,8 @@ class LstmMlpPolicy(RecurrentPolicy):
                  cnn_extractor=nature_cnn, feature_extraction="mlp", n_rnn=128, share_rnn=False,
                  layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
         if layers is None:
-            layers = {"ff": None, "lstm": [64, 64], "head": []}
+            layers = {"ff": None, "rnn": [64, 64], "head": []}
+
         else:
             assert layers["ff"] is None
         super().__init__(sess, ob_space, ac_space, layers, n_env, n_steps, n_batch,
@@ -604,11 +613,11 @@ class LstmFFMlpPolicy(RecurrentPolicy):
 class LarnnMlpPolicy(RecurrentPolicy):
     recurrent = True
 
-    def __init__(self, sess, ob_space, ac_space, n_env=1, n_steps=1, n_batch=None, reuse=False,
+    def __init__(self, sess, ob_space, ac_space, rnn_epsilon, n_env=1, n_steps=1, n_batch=None, reuse=False,
                  layers=None, cnn_extractor=nature_cnn, feature_extraction="mlp", n_rnn=128, share_rnn=False,
                  layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
         if layers is None:
-            layers = {"ff": None, "rnn": [], "head": [256, 128]}
+            layers = {"ff": None, "rnn": [64, 64], "head": []}
         else:
             assert layers["ff"] is None
         super().__init__(sess, ob_space, ac_space, layers, n_env, n_steps, n_batch,
@@ -617,7 +626,9 @@ class LarnnMlpPolicy(RecurrentPolicy):
                          share_rnn=share_rnn, layer_norm=layer_norm, act_fun=act_fun,
                          obs_module_indices=obs_module_indices, **kwargs)
 
-        self.rnn_inputs = sorted(self.rnn_inputs + ["obs"])
+        self.rnn_inputs = sorted(self.rnn_inputs + ["obs", "action"])
+        self.keras_reuse = True
+        self._rnn_epsilon = rnn_epsilon
 
 
     def make_actor(self, obs=None, dones=None, reuse=False, scope="pi"):
