@@ -550,7 +550,7 @@ class TD3(OffPolicyRLModel):
 
                 if hasattr(self.policy, "collect_data"):
                     extra_data.update(self.policy_tf_act.collect_data(locals(), globals()))
-                self.replay_buffer.add(obs, action, reward, new_obs, done, **extra_data)
+                self.replay_buffer.add(obs, action, reward, new_obs, done, **extra_data) # Extra data must be sent as kwargs to support separate bootstrap and done signals (needed for HER style algorithms)
                 episode_data.append({"obs": obs, "action": action, "reward": reward, "new_obs": new_obs, "done": done, **extra_data})
                 obs = new_obs
 
