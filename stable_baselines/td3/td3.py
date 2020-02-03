@@ -134,6 +134,8 @@ class TD3(OffPolicyRLModel):
             self.policy_act = None
             self.act_ops = None
             self.dones_ph = None
+            self.sequence_length = None
+            self.scan_length = None
 
         self.train_extra_phs = {}
 
@@ -169,23 +171,32 @@ class TD3(OffPolicyRLModel):
                         if "my_size" in policy_tf_args:
                             policy_tf_kwargs["my_size"] = len(self._get_env_parameters())
                         if "goal_size" in policy_tf_args:
-                            policy_tf_kwargs["goal_size"] = self.env.goal_dim
+                            policy_tf_kwargs["goal_size"] = self.env.goal_dim  # TODO: need to get this some other way or save it
 
                         if self.buffer_kwargs is not None:
-                            scan_length = self.buffer_kwargs.get("scan_length", 0)
+                            sequence_length = self.buffer_kwargs.get("sequence_length", 1)
                         else:
-                            scan_length = 0
+                            sequence_length = 1
 
                         self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
-                                                     n_batch=self.batch_size, n_steps=scan_length + 1,
+                                                     n_batch=self.batch_size,
+                                                     n_steps=sequence_length,
                                                      **policy_tf_kwargs, **self.policy_kwargs)
                         self.policy_tf_act = self.policy(self.sess, self.observation_space, self.action_space,
                                                          n_batch=1, **policy_tf_kwargs,
                                                          **self.policy_kwargs)
                         self.target_policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
                                                             n_batch=self.batch_size,
-                                                            n_steps=scan_length + 1, **policy_tf_kwargs,
+                                                            n_steps=sequence_length, **policy_tf_kwargs,
                                                             **self.policy_kwargs)
+
+                        # TODO: litta hack
+                        if self.policy_tf.share_lstm:
+                            self.target_policy_tf.state_ph = self.policy_tf.state_ph
+                        else:
+                            self.target_policy_tf.pi_state_ph = self.policy_tf.pi_state_ph
+                            self.target_policy_tf.qf1_state_ph = self.policy_tf.qf1_state_ph
+                            self.target_policy_tf.qf2_state_ph = self.policy_tf.qf2_state_ph
 
                         for ph_name in self.policy_tf.extra_phs:
                             if "target_" in ph_name:
@@ -232,7 +243,13 @@ class TD3(OffPolicyRLModel):
                             replay_buffer_kw.update(self.buffer_kwargs)
                         if self.recurrent_policy:
                             replay_buffer_kw["extra_data_names"] = self.policy_tf.extra_data_names
+                            replay_buffer_kw["rnn_inputs"] = self.policy_tf.rnn_inputs
                         self.replay_buffer = self.buffer_type(**replay_buffer_kw)
+
+                if self.recurrent_policy:
+                    self.sequence_length = self.replay_buffer.sequence_length
+                    self.scan_length = self.replay_buffer.scan_length
+                    assert self.scan_length % self.sequence_length == 0
 
                 with tf.variable_scope("model", reuse=False):
                     # Create the policy
@@ -352,6 +369,11 @@ class TD3(OffPolicyRLModel):
                     # All ops to call during one training step
                     self.step_ops = [qf1_loss, qf2_loss,
                                      qf1, qf2, train_values_op]
+                    if self.recurrent_policy:
+                        if self.policy_tf.share_lstm:
+                            self.step_ops.append(self.policy_tf.state)
+                        else:
+                            self.step_ops.extend([self.policy_tf.pi_state, self.policy_tf.qf1_state, self.policy_tf.qf2_state])
 
                     # Monitor losses and entropy in tensorboard
                     tf.summary.scalar("rew_loss", rew_loss)
@@ -390,10 +412,26 @@ class TD3(OffPolicyRLModel):
             self.learning_rate_ph: learning_rate
         }
 
-        if self.recurrent_policy:
-            feed_dict.update({
-                self.dones_ph: batch_extra["reset"]
-            })
+        if self.recurrent_policy and self.buffer_kwargs["scan_length"] > 0:  # TODO: find better condition here
+            obs_scan = batch_extra.pop("scan_obs")  # TODO: ensure that target network gets state calculated for that batch sample by main network, or fix separate target state saving and calculation
+            for seq_i in range(self.scan_length // self.sequence_length):
+                seq_data_idxs = np.zeros(shape=(self.scan_length,), dtype=np.bool)
+                seq_data_idxs[seq_i * self.sequence_length:(seq_i + 1) * self.sequence_length] = True
+                seq_data_idxs = np.tile(seq_data_idxs, self.batch_size // self.sequence_length)
+                feed_dict_scan = {self.observations_ph: obs_scan[seq_data_idxs]}
+                feed_dict_scan.update({self.train_extra_phs[k.replace("scan_", "")]: v[seq_data_idxs]
+                                       for k, v in batch_extra.items() if "scan_" in k})
+                if self.policy_tf.share_lstm:
+                    states = self.sess.run(self.policy_tf.state, feed_dict_scan)
+                    updated_states = {"state": states}
+                else:
+                    states = self.sess.run([self.policy_tf.pi_state, self.policy_tf.qf1_state, self.policy_tf.qf2_state],
+                                           feed_dict_scan)
+                    updated_states = {k: states[i] for i, k in enumerate(["pi_state", "qf1_state", "qf2_state"])}
+                batch_extra.update(updated_states)
+                if self.policy_tf.save_state:
+                    self.replay_buffer.update_state([(idx[0], idx[1] - self.scan_length + self.sequence_length * seq_i)
+                                                     for idx in batch_extra["state_idxs_scan"]], updated_states)
 
         feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items()})
 
@@ -410,6 +448,13 @@ class TD3(OffPolicyRLModel):
             writer.add_summary(summary, step)
         else:
             out = self.sess.run(step_ops, feed_dict)
+
+        if self.recurrent_policy and self.policy_tf.save_state:
+            if self.policy_tf.share_lstm:
+                states = {"state": out[5]}
+            else:
+                states = {k: out[5+i] for i, k in enumerate(["pi_state", "qf1_state", "qf2_state"])}
+            self.replay_buffer.update_state(batch_extra["state_idxs"], states)
 
         # Unpack to monitor losses
         qf1_loss, qf2_loss, *_values = out
@@ -462,6 +507,7 @@ class TD3(OffPolicyRLModel):
             if self.recurrent_policy:
                 done = False
                 policy_state = self.policy_tf_act.initial_state
+                prev_policy_state = self.policy_tf_act.initial_state  # Keep track of this so it doesnt have to be recalculated when saving it to replay buffer
 
             for step in range(initial_step, total_timesteps):
                 if callback is not None:
@@ -510,7 +556,7 @@ class TD3(OffPolicyRLModel):
 
                 if hasattr(self.policy, "collect_data"):
                     extra_data.update(self.policy_tf_act.collect_data(locals(), globals()))
-                self.replay_buffer.add(obs, action, reward, new_obs, done, **extra_data)
+                self.replay_buffer.add(obs, action, reward, new_obs, done, **extra_data) # Extra data must be sent as kwargs to support separate bootstrap and done signals (needed for HER style algorithms)
                 episode_data.append({"obs": obs, "action": action, "reward": reward, "new_obs": new_obs, "done": done, **extra_data})
                 obs = new_obs
 
@@ -556,6 +602,8 @@ class TD3(OffPolicyRLModel):
                         infos_values = np.mean(mb_infos_vals, axis=0)
 
                 episode_rewards[-1] += reward
+                if self.recurrent_policy:
+                    prev_policy_state = policy_state
                 if done:
                     if isinstance(self.replay_buffer, DiscrepancyReplayBuffer) and n_updates - last_replay_update >= 5000:
                         self.replay_buffer.update_priorities()
@@ -571,6 +619,8 @@ class TD3(OffPolicyRLModel):
                             obs = self.env.reset()
                     episode_data = []
                     episode_rewards.append(0.0)
+                    if self.recurrent_policy:
+                        prev_policy_state = self.policy_tf_act.initial_state
 
                     maybe_is_success = info.get('is_success')
                     if maybe_is_success is not None:

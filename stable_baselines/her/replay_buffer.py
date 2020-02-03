@@ -27,6 +27,7 @@ class GoalSelectionStrategy(Enum):
     # Select a stable goal that was achieved (stable as in achieved in many consecutive steps)
     # after the current step, in the same episode
     FUTURE_STABLE = 4
+    HORIZON = 5
 
 
 # For convenience
@@ -36,7 +37,8 @@ KEY_TO_GOAL_STRATEGY = {
     'future': GoalSelectionStrategy.FUTURE,
     'final': GoalSelectionStrategy.FINAL,
     'episode': GoalSelectionStrategy.EPISODE,
-    'random': GoalSelectionStrategy.RANDOM
+    'random': GoalSelectionStrategy.RANDOM,
+    "horizon": GoalSelectionStrategy.HORIZON
 }
 
 
@@ -105,7 +107,7 @@ class HindsightExperienceReplayWrapper(object):
 
     def sample(self, *args, **kwargs):
         batch = self.replay_buffer.sample(*args, **kwargs)
-        if self.replay_buffer.__name__ == "RecurrentReplayBuffer" and self.replay_buffer.scan_length > 0:
+        if self.replay_buffer.__name__ == "RecurrentReplayBuffer" and self.replay_buffer.scan_length > 0 and False:
             # TODO: i think it is guaranteed that there are always scan_length instances but im not sure
             obs, next_obs = batch[0], batch[3]
             sampled_goals = obs[::self.replay_buffer.scan_length + 1, -self.env.goal_dim:]
@@ -137,9 +139,14 @@ class HindsightExperienceReplayWrapper(object):
         :param transition_idx: (int) the transition to start sampling from
         :return: (np.ndarray) an achieved goal
         """
-        if self.goal_selection_strategy == GoalSelectionStrategy.FUTURE:
+        if self.goal_selection_strategy == GoalSelectionStrategy.HORIZON:
+            selected_idx = np.random.randint(transition_idx + 1,
+                                             min(int(transition_idx + 2 + 0.05 * len(episode_transitions)),
+                                                 len(episode_transitions)))
+            selected_transition = episode_transitions[selected_idx]
+        elif self.goal_selection_strategy == GoalSelectionStrategy.FUTURE:
             # Sample a goal that was observed in the same episode after the current step
-            selected_idx = np.random.choice(np.arange(transition_idx + 1, len(episode_transitions)))
+            selected_idx = np.random.randint(transition_idx + 1, len(episode_transitions))
             selected_transition = episode_transitions[selected_idx]
         elif self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
             weights = 1 / (self.stable_indices[self.stable_indices > transition_idx] - transition_idx + 1)
@@ -247,7 +254,7 @@ class HindsightExperienceReplayWrapper(object):
                     continue
 
                 # We cannot sample a goal from the future in the last step of an episode
-                if transition_idx == len(self.episode_transitions) - 1 and self.goal_selection_strategy == GoalSelectionStrategy.FUTURE:
+                if transition_idx == len(self.episode_transitions) - 1 and self.goal_selection_strategy in [GoalSelectionStrategy.FUTURE, GoalSelectionStrategy.HORIZON]:
                     break
                 elif transition_idx >= len(self.episode_transitions) - 2 and self.goal_selection_strategy == GoalSelectionStrategy.FUTURE_STABLE:
                     continue
@@ -266,7 +273,6 @@ class HindsightExperienceReplayWrapper(object):
                     obs_dict['desired_goal'] = goal
                     next_obs_dict['desired_goal'] = goal
 
-                    # Update the reward according to the new desired goal
                     prev_state = obs_dict["achieved_goal"]
                     achieved_goal = next_obs_dict['achieved_goal']
                     desired_goal = goal
@@ -289,3 +295,8 @@ class HindsightExperienceReplayWrapper(object):
                         self.replay_buffer.add_her(obs, next_obs, reward, transition_idx)
                     else:
                         self.replay_buffer.add(obs, action, reward, next_obs, done, *extra_data)
+            if self.replay_buffer.__name__ == "RecurrentReplayBuffer":
+                self.replay_buffer.store_episode()
+
+    def update_state(self, *args, **kwargs):
+        return self.replay_buffer.update_state(*args, **kwargs)

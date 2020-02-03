@@ -97,36 +97,56 @@ class ReplayBuffer(object):
         return self._encode_sample(idxes)
 
 
-# TODO: lots of work to do on this one
+# TODO: scan/"burn in"
 class RecurrentReplayBuffer(ReplayBuffer):
     __name__ = "RecurrentReplayBuffer"
 
-    def __init__(self, size, episode_length, scan_length, rnn_inputs=(), extra_data_names=(), her_k=4):
+    def __init__(self, size, sequence_length=1, scan_length=0, extra_data_names=(), rnn_inputs=(), her_k=4):
         super().__init__(size)
-        self._maxsize = self._maxsize // episode_length
+        self._sample_cycle = 0
         self.her_k = her_k
-        self.scan_length = scan_length
-        self._extra_data_names = extra_data_names
-        self._rnn_inputs = rnn_inputs
-        self._data_idxs = {"obs": 0, "action": 1, "reward": 2, "obs_tp1": 3, "done": 4,
-                           **{name: 5 + i for i, name in enumerate(self._extra_data_names)}}
-        self._rnn_data_idxs = [self._data_idxs[name] for name in self._rnn_inputs]
+        self._extra_data_names = sorted(extra_data_names)
+        self._data_name_to_idx = {"obs": 0, "action": 1, "reward": 2, "obs_tp1": 3, "done": 4,
+                                  **{name: 5 + i for i, name in enumerate(self._extra_data_names)}}
         self._current_episode_data = []
+        self.sequence_length = sequence_length
+        assert self.sequence_length >= 1
+        self.scan_length = scan_length
+        self._rnn_inputs = rnn_inputs
+        assert self.scan_length == 0 or len(self._rnn_inputs) > 0
+        self._is_full = False
 
-    def add(self, obs_t, action, reward, obs_tp1, done, *extra_data):
+    def add(self, obs_t, action, reward, obs_tp1, done, *extra_data, **extra_data_kwargs):
         if self.her_k > 0:
             obs_t = [obs_t]
             obs_tp1 = [obs_tp1]
             reward = [reward]
-        data = (obs_t, action, reward, obs_tp1, done, *extra_data)
+        data = [obs_t, action, reward, obs_tp1, done, *extra_data, *[extra_data_kwargs[k] for k in sorted(extra_data_kwargs)]]  # Data needs to be mutable
         self._current_episode_data.append(data)
+        self._sample_cycle += 1
         if done:
-            if self._next_idx >= len(self._storage):
+            self.store_episode()
+
+    def store_episode(self):
+        if len(self._current_episode_data) >= self.sequence_length + self.scan_length:
+            if self._sample_cycle >= self.buffer_size:
+                self._next_idx = 0
+                self._sample_cycle = 0
+                self._is_full = True
+            if not self._is_full:
                 self._storage.append(self._current_episode_data)
             else:
-                self._storage[self._next_idx] = self._current_episode_data
-            self._next_idx = (self._next_idx + 1) % self._maxsize
-            self._current_episode_data = []
+                try:
+                    self._storage[self._next_idx] = self._current_episode_data 
+                except IndexError:
+                    self._storage.append(self._current_episode_data)
+                self._next_idx += 1
+        else:
+            if self.her_k > 0:
+                self._sample_cycle -= sum([len(t[0]) for t in self._current_episode_data])
+            else:
+                self._sample_cycle -= len(self._current_episode_data)
+        self._current_episode_data = []
 
     def add_her(self, obs, obs_tp1, reward, timestep, ep_index=None):
         assert self.her_k > 0
@@ -137,93 +157,92 @@ class RecurrentReplayBuffer(ReplayBuffer):
         episode_data[timestep][0].append(obs)
         episode_data[timestep][2].append(reward)
         episode_data[timestep][3].append(obs_tp1)
+        self._sample_cycle += 1
 
-    def sample(self, batch_size, **_kwargs):
-        if self.her_k > 0:
-            num_episodes = len(self._storage)
-            if num_episodes >= batch_size:
-                ep_idxes = random.sample(range(num_episodes), k=batch_size)
-            else:
-                ep_idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]
-            ep_ts = [random.randint(self.scan_length * (1 + self.her_k), (len(self._storage[ep_i]) - 1) * (1 + self.her_k)) for ep_i in ep_idxes]  # - self._optim_length)
-            return self._encode_sample(ep_idxes, ep_ts)
-        else:
-            return super().sample(batch_size)
+    def sample(self, batch_size, sequence_length=None, **_kwargs):
+        if sequence_length is None:
+            sequence_length = self.sequence_length
+        assert batch_size % sequence_length == 0
 
-    def _encode_sample(self, ep_idxes, ep_ts):
+        ep_idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size // sequence_length)]
+        ep_ts = [random.randint(self.scan_length, len(self._storage[ep_i]) - 1 - (sequence_length - 1)) for ep_i in
+                 ep_idxes]
+        extra_data = {name: [] for name in self._extra_data_names}
+        extra_data.update({"scan_{}".format(name): [] for name in self._rnn_inputs})
+
         obses_t, actions, rewards, obses_tp1, dones = [], [], [], [], []
-        extra_data_not_rnn = [name for name in self._extra_data_names if name not in self._rnn_inputs]
-        extra_data_not_rnn_idxs = [self._data_idxs[name] for name in extra_data_not_rnn]
-        extra_data = [[] for i in range(len(extra_data_not_rnn))]
-        hists = [[] for i in range(len(self._rnn_inputs))]
-
         for i, ep_i in enumerate(ep_idxes):
+            ep_data = self.storage[ep_i]
+            ep_t = ep_ts[i]
             if self.her_k > 0:
-                ep_t = int(ep_ts[i] / (self.her_k + 1))
-            else:
-                ep_t = ep_ts[i]
-            ep_data = self._storage[ep_i]
-            obs_t, action, reward, obs_tp1, done, *extra_timestep_data = ep_data[ep_t]
-            if self.her_k > 0:
-                her_idx = ep_ts[i] - ep_t * (self.her_k + 1)
-                obs_t, obs_tp1, reward = obs_t[her_idx], obs_tp1[her_idx], reward[her_idx]
-            if self.scan_length > 0:
-                ep_scan_start = ep_t - self.scan_length if ep_t - self.scan_length >= 0 else 0
-                ep_hists = [[] for i in range(len(self._rnn_inputs))]
-                for hist_i in range(ep_scan_start, ep_t + 1):
-                    for input_i, data_idx in enumerate(self._rnn_data_idxs):
-                        hist_data = ep_data[hist_i][data_idx]
-                        if self.her_k > 0 and data_idx in [0, 2, 3]:
-                            hist_data = hist_data[ep_ts[i] - ep_t * (self.her_k + 1)]
-                        ep_hists[input_i].append(np.array(hist_data))
-            else:
-                ep_hists = [[ep_data[data_idx]] for data_idx in self._rnn_data_idxs]
-            obses_t.append(np.array(obs_t, copy=False))
-            actions.append(np.array(action, copy=False))
-            rewards.append(reward)
-            obses_tp1.append(np.array(obs_tp1, copy=False))
-            dones.append(done)
-            for hist_i in range(len(hists)):
-                hists[hist_i].extend(ep_hists[hist_i])
-            for j, data_i in enumerate(extra_data_not_rnn_idxs):
-                if np.ndim(extra_timestep_data[j]) == 0:
-                    extra_data[j].append(extra_timestep_data[data_i - 5])
-                else:
-                    extra_data[j].append(np.array(extra_timestep_data[data_i - 5], copy=False))
+                her_idx = random.randint(0, self.her_k + 2)
+            for scan_t in range(ep_t - self.scan_length, ep_t):
+                for scan_data_name in self._rnn_inputs:
+                    data = ep_data[scan_t][self._data_name_to_idx[scan_data_name]]
+                    if self.her_k > 0 and self._data_name_to_idx[scan_data_name] in [self._data_name_to_idx[n] for n in
+                                                                                     ["obs", "reward", "obs_tp1"]]:
+                        data = data[0]
+                    extra_data["scan_{}".format(scan_data_name)].append(data)
+            for seq_i in range(sequence_length):
+                obs_t, action, reward, obs_tp1, done, *extra_timestep_data = ep_data[ep_t + seq_i]
+                if self.her_k > 0:
+                    try:  # TODO: fix indexing with last timestep data not having her data
+                        obs_t, obs_tp1, reward = obs_t[her_idx], obs_tp1[her_idx], reward[her_idx]
+                    except IndexError:
+                        obs_t, obs_tp1, reward = obs_t[0], obs_tp1[0], reward[0]
+                obses_t.append(np.array(obs_t, copy=False))
+                actions.append(np.array(action, copy=False))
+                rewards.append(reward)
+                obses_tp1.append(np.array(obs_tp1, copy=False))
+                dones.append(done)
+                for data_i, extra_data_name in enumerate(self._extra_data_names):
+                    data = extra_timestep_data[data_i]
+                    if np.ndim(data) == 0:
+                        extra_data[extra_data_name].append(data)
+                    else:
+                        extra_data[extra_data_name].append(np.array(data, copy=False))
 
-        extra_data_dict = {name: np.array(extra_data[i]) for i, name in enumerate(extra_data_not_rnn)}
-        batch_resets = np.zeros(shape=(len(ep_idxes) * (self.scan_length + 1)), dtype=np.bool)
-        batch_resets[::self.scan_length] = 1
-        extra_data_dict["reset"] = batch_resets
-        res = [np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones),
-            extra_data_dict]
-        for i, name in enumerate(self._rnn_inputs):
-            rnn_input_idx = self._rnn_data_idxs[i]
-            if rnn_input_idx < 5:
-                res[rnn_input_idx] = np.array(hists[i])
-            else:
-                res[-1][name] = np.array(hists[i])
+        extra_data = {k: np.array(v) for k, v in extra_data.items()}
+        for state_data_name in [name for name in self._extra_data_names if "state" in name]:
+            extra_data[state_data_name] = extra_data[state_data_name][::sequence_length]
+        extra_data["state_idxs"] = list(zip(ep_idxes, [t + sequence_length for t in ep_ts]))
+        if self.scan_length > 0:
+            extra_data["state_idxs_scan"] = list(zip(ep_idxes, ep_ts))
 
+        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), extra_data
 
-        return res
+    def update_state(self, idxs, data):
+        for i, (ep_idx, t) in enumerate(idxs):
+            try:
+                for state_name, state_val in data.items():
+                    self.storage[ep_idx][t][self._data_name_to_idx[state_name]] = state_val[i, :]
+            except IndexError:  # Hidden state computed for last sample in episode, doesnt belong to any sample
+                pass
 
-    def __len__(self):
-        return sum([max(0, len(ep) - self.scan_length) for ep in self._storage])
+    def __len__(self):  # TODO: consider if this is important enough to do right
+        return max(self._sample_cycle - ((len(self._current_episode_data) - 1) * (1 + self.her_k) + 1), 0) \
+            if not self._is_full else self.buffer_size
+
+    def is_full(self):
+        return self._is_full
 
 
 # TODO: maybe add support for episode constant data
 class EpisodicRecurrentReplayBuffer(ReplayBuffer):
     __name__ = "EpisodicRecurrentReplayBuffer"
 
-    def __init__(self, size, episode_length, sample_consecutive_max=-1, extra_data_names=()):
+    def __init__(self, size, episode_length, sequence_length=10, extra_data_names=()):
         super().__init__(size // episode_length)
         self._current_episode_data = []
-        #self._episode_data = []  # Data which is constant within episode
+        # self._episode_data = []  # Data which is constant within episode
         self._extra_data_names = sorted(extra_data_names)
-        self._sample_consecutive_max = sample_consecutive_max
+        self._data_name_to_idx = {"obs": 0, "action": 1, "reward": 2, "obs_tp1": 3, "done": 4}
+        self._data_name_to_idx.update({name: i + 5 for i, name in enumerate(self._extra_data_names)})
+        self._sequence_length = sequence_length  # TODO: add scan length and assert is multiple of sample_consecutive_max
 
     def add(self, obs_t, action, reward, obs_tp1, done, *extra_data):
-        self._current_episode_data.append((obs_t, action, reward, obs_tp1, done, *extra_data))
+        self._current_episode_data.append(
+            [obs_t, action, reward, obs_tp1, done, *extra_data])  # List to support updating states etc.
 
         if done:
             self.store_episode()
@@ -239,18 +258,19 @@ class EpisodicRecurrentReplayBuffer(ReplayBuffer):
         self._next_idx = (self._next_idx + 1) % self._maxsize
         self._current_episode_data = []
 
-    def sample(self, batch_size, sample_consecutive_max=None):
-        if sample_consecutive_max is None:
-            sample_consecutive_max = self._sample_consecutive_max
+    def sample(self, batch_size, sequence_length=None):
+        if sequence_length is None:
+            sequence_length = self._sequence_length
         samples_left = batch_size
-        obses_t, actions, rewards, obses_tp1, dones, resets = [], [], [], [], [], []
+        obses_t, actions, rewards, obses_tp1, dones = [], [], [], [], []
         extra_data = [[] for i in range(len(self._extra_data_names))]
+        state_idxs = []
         while samples_left > 0:
             ep_idx = np.random.randint(0, len(self._storage) - 1)
             ep_data = self._storage[ep_idx]
-            if sample_consecutive_max != -1:
-                ep_start_idx = np.random.randint(0, max(len(ep_data) - sample_consecutive_max + 1, 1))
-                ep_data = ep_data[ep_start_idx:ep_start_idx + sample_consecutive_max]
+            ep_start_idx = np.random.randint(0, max(len(ep_data) - sequence_length, 1))
+            ep_data = ep_data[ep_start_idx:ep_start_idx + sequence_length + 1]
+            state_idxs.append((ep_idx, ep_start_idx + sequence_length))
             if len(ep_data) > samples_left:
                 ep_data = ep_data[:samples_left]
 
@@ -261,7 +281,6 @@ class EpisodicRecurrentReplayBuffer(ReplayBuffer):
                 rewards.append(reward)
                 obses_tp1.append(np.array(obs_tp1, copy=False))
                 dones.append(done)
-                resets.append(True if j == 0 else False)
                 for data_i, data in enumerate(extra_timestep_data):
                     if np.ndim(data) == 0:
                         extra_data[data_i].append(data)
@@ -273,9 +292,21 @@ class EpisodicRecurrentReplayBuffer(ReplayBuffer):
             assert samples_left >= 0
 
         extra_data_dict = {name: np.array(extra_data[i]) for i, name in enumerate(self._extra_data_names)}
-        extra_data_dict["reset"] = np.array(resets)
+        extra_data_dict["reset"] = np.zeros(shape=(batch_size,))  # np.array(resets)
+        extra_data_dict["state"] = extra_data_dict["state"][::sequence_length]
+        extra_data_dict["state_idxs"] = state_idxs
 
-        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), extra_data_dict
+        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(
+            dones), extra_data_dict
+
+    def update_state(self, idxs, data):
+        for i, (ep_idx, t) in enumerate(idxs):
+            if isinstance(data, list):
+                self.storage[ep_idx][t][self._data_name_to_idx["pi_state"]] = data[0][i, :]
+                self.storage[ep_idx][t][self._data_name_to_idx["qf1_state"]] = data[1][i, :]
+                self.storage[ep_idx][t][self._data_name_to_idx["qf2_state"]] = data[2][i, :]
+            else:
+                self.storage[ep_idx][t][self._data_name_to_idx["state"]] = data[i, :]
 
     def __len__(self):
         if len(self.storage) > 1:
@@ -324,11 +355,10 @@ class DRRecurrentReplayBuffer(ReplayBuffer):
     def sample(self, batch_size, **_kwargs):
         if self.her_k > 0:
             num_episodes = len(self._storage)
-            if num_episodes >= batch_size:
-                ep_idxes = random.sample(range(num_episodes), k=batch_size)
-            else:
-                ep_idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]
-            ep_ts = [random.randint(self._scan_length * (1 + self.her_k), (len(self._storage[ep_i]) - 1) * (1 + self.her_k)) for ep_i in ep_idxes]  # - self._optim_length)
+            ep_idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]
+            ep_ts = [
+                random.randint(self._scan_length * (1 + self.her_k), (len(self._storage[ep_i]) - 1) * (1 + self.her_k))
+                for ep_i in ep_idxes]  # - self._optim_length)
             return self._encode_sample(ep_idxes, ep_ts)
         else:
             return super(DRRecurrentReplayBuffer, self).sample(batch_size)
@@ -368,7 +398,9 @@ class DRRecurrentReplayBuffer(ReplayBuffer):
             hists_a.extend(hist_a)
             goals.append(np.array(goal, copy=False))
             mys.append(np.array(self._episode_my[ep_i], copy=False))
-        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), {"goal": np.array(goals), "obs_rnn": np.array(hists_o), "action_prev": np.array(hists_a), "my": np.array(mys)}
+        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), {
+            "goal": np.array(goals), "obs_rnn": np.array(hists_o), "action_prev": np.array(hists_a),
+            "my": np.array(mys)}
 
 
 class PrioritizedReplayBuffer(ReplayBuffer):
@@ -455,7 +487,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             weights.append(weight / max_weight)
         weights = np.array(weights)
         encoded_sample = self._encode_sample(idxes)
-        #return tuple(list(encoded_sample) + [weights, idxes])
+        # return tuple(list(encoded_sample) + [weights, idxes])
         return tuple(list(encoded_sample) + {"is_weights": weights, "idxs": idxes})
 
     def update_priorities(self, idxes, priorities):
@@ -632,7 +664,8 @@ class StableReplayBuffer(ReplayBuffer):
 
         scores = np.array(self.scores)
         scores = np.clip(scores, np.percentile(scores, 10), np.percentile(scores, 90))
-        idxs = np.random.choice(np.arange(len(self.scores)), size=(batch_size,), p=scores / np.sum(scores), replace=False)
+        idxs = np.random.choice(np.arange(len(self.scores)), size=(batch_size,), p=scores / np.sum(scores),
+                                replace=False)
 
         return self._encode_sample(idxs)
 
