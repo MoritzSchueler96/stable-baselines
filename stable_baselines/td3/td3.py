@@ -532,7 +532,6 @@ class TD3(OffPolicyRLModel):
                 else:
                     if self.recurrent_policy:
                         action, policy_state = self.policy_tf_act.step(obs[None], state=policy_state, mask=np.array(done)[None])
-                        policy_state = np.copy(policy_state)
                         action = action.flatten()
                     else:
                         action = self.policy_tf.step(obs[None]).flatten()
