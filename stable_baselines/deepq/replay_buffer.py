@@ -116,12 +116,12 @@ class RecurrentReplayBuffer(ReplayBuffer):
         assert self.scan_length == 0 or len(self._rnn_inputs) > 0
         self._is_full = False
 
-    def add(self, obs_t, action, reward, obs_tp1, done, *extra_data):
+    def add(self, obs_t, action, reward, obs_tp1, done, *extra_data, **extra_data_kwargs):
         if self.her_k > 0:
             obs_t = [obs_t]
             obs_tp1 = [obs_tp1]
             reward = [reward]
-        data = [obs_t, action, reward, obs_tp1, done, *extra_data]  # Data needs to be mutable
+        data = [obs_t, action, reward, obs_tp1, done, *extra_data, *[extra_data_kwargs[k] for k in sorted(extra_data_kwargs)]]  # Data needs to be mutable
         self._current_episode_data.append(data)
         self._sample_cycle += 1
         if done:
