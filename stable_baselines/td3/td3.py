@@ -423,7 +423,7 @@ class TD3(OffPolicyRLModel):
         }
 
         if self.recurrent_policy and self.buffer_kwargs["scan_length"] > 0:  # TODO: find better condition here
-            obs_scan = batch_extra.pop("scan_obs")
+            obs_scan = batch_extra.pop("scan_obs")  # TODO: ensure that target network gets state calculated for that batch sample by main network, or fix separate target state saving and calculation
             for seq_i in range(self.scan_length // self.sequence_length):
                 seq_data_idxs = np.zeros(shape=(self.scan_length,), dtype=np.bool)
                 seq_data_idxs[seq_i * self.sequence_length:(seq_i + 1) * self.sequence_length] = True
