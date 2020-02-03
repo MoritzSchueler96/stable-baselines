@@ -14,7 +14,7 @@ from stable_baselines.common.vec_env import VecEnv
 from stable_baselines.deepq.replay_buffer import ReplayBuffer, DiscrepancyReplayBuffer, StableReplayBuffer, PrioritizedReplayBuffer, DRRecurrentReplayBuffer
 from stable_baselines.ppo2.ppo2 import safe_mean, get_schedule_fn
 from stable_baselines.sac.sac import get_vars
-from stable_baselines.td3.policies import TD3Policy, RecurrentPolicy, DRPolicy
+from stable_baselines.td3.policies import TD3Policy, RecurrentPolicy, DRPolicy, LarnnMlpPolicy
 from stable_baselines import logger
 from stable_baselines.common.schedules import ExponentialSchedule
 
@@ -255,14 +255,23 @@ class TD3(OffPolicyRLModel):
                         critic_args = inspect.signature(self.policy_tf.make_critics).parameters
                         actor_kws = {k: v for k, v in self.train_extra_phs.items() if k in actor_args}
                         critic_kws = {k: v for k, v in self.train_extra_phs.items() if k in critic_args}
-                        self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph, **actor_kws)
-                        self.policy_act = policy_act = self.policy_tf_act.make_actor(reuse=True)
+
+                        if self.policy_tf.keras_reuse:  # TODO: fix hacky keras reuse bandaid
+                            self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph, **actor_kws)
+                            self.policy_tf_act._rnn_layer = self.policy_tf._rnn_layer
+                            self.policy_act = policy_act = self.policy_tf_act.make_actor(reuse=True)
+                        else:
+                            self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph, **actor_kws)
+                            self.policy_act = policy_act = self.policy_tf_act.make_actor(reuse=True)
                         # Use two Q-functions to improve performance by reducing overestimation bias
                         qf1, qf2 = self.policy_tf.make_critics(self.processed_obs_ph, self.actions_ph, **critic_kws)
                         _, _ = self.policy_tf_act.make_critics(None, self.actions_ph, reuse=True)
                         # Q value when following the current policy
                         qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph, policy_out, **critic_kws,
                                                                      reuse=True)
+                        if self.policy_tf.keras_reuse:
+                            self.policy_tf_act._action_ph = tf.placeholder(dtype=self.policy_tf_act.ac_space.dtype, shape=(1,) + self.policy_tf_act.ac_space.shape, name="action_ph")
+                            _, _ = self.policy_tf_act.make_critics(reuse=True)
                     else:
                         self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph)
                         # Use two Q-functions to improve performance by reducing overestimation bias
@@ -407,12 +416,14 @@ class TD3(OffPolicyRLModel):
         }
 
         if self.recurrent_policy and self.buffer_kwargs["scan_length"] > 0:  # TODO: find better condition here
-            obs_scan = batch_extra.pop("scan_obs")  # TODO: ensure that target network gets state calculated for that batch sample by main network, or fix separate target state saving and calculation
+            default_data = {self.observations_ph: batch_extra.pop("scan_obs")}  # TODO: ensure that target network gets state calculated for that batch sample by main network, or fix separate target state saving and calculation
+            if "scan_action" in batch_extra:
+                default_data[self.actions_ph] = batch_extra.pop("scan_action")
             for seq_i in range(self.scan_length // self.sequence_length):
                 seq_data_idxs = np.zeros(shape=(self.scan_length,), dtype=np.bool)
                 seq_data_idxs[seq_i * self.sequence_length:(seq_i + 1) * self.sequence_length] = True
                 seq_data_idxs = np.tile(seq_data_idxs, self.batch_size // self.sequence_length)
-                feed_dict_scan = {self.observations_ph: obs_scan[seq_data_idxs]}
+                feed_dict_scan = {k: v[seq_data_idxs] for k, v  in default_data.items()}
                 feed_dict_scan.update({self.train_extra_phs[k.replace("scan_", "")]: v[seq_data_idxs]
                                        for k, v in batch_extra.items() if "scan_" in k})
                 if self.policy_tf.share_rnn:
@@ -444,7 +455,7 @@ class TD3(OffPolicyRLModel):
             out = self.sess.run(step_ops, feed_dict)
 
         if self.recurrent_policy and self.policy_tf.save_state:
-            if self.policy_tf.share_lstm:
+            if self.policy_tf.share_rnn:
                 states = {"state": out[5]}
             else:
                 states = {k: out[5+i] for i, k in enumerate(["pi_state", "qf1_state", "qf2_state"])}
@@ -521,6 +532,7 @@ class TD3(OffPolicyRLModel):
                 else:
                     if self.recurrent_policy:
                         action, policy_state = self.policy_tf_act.step(obs[None], state=policy_state, mask=np.array(done)[None])
+                        policy_state = np.copy(policy_state)
                         action = action.flatten()
                     else:
                         action = self.policy_tf.step(obs[None]).flatten()
