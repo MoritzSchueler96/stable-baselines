@@ -553,7 +553,7 @@ class TD3(OffPolicyRLModel):
                     feed_dict[self.q_filtering_disabled_ph] = self.num_timesteps < self.expert_filtering_starts
 
         if self.recurrent_policy and self.buffer_kwargs["scan_length"] > 0:  # TODO: find better condition here
-            obs_scan = batch_extra.pop("scan_obs")
+            obs_scan = batch_extra.pop("scan_obs")  # TODO: ensure that target network gets state calculated for that batch sample by main network, or fix separate target state saving and calculation
             for seq_i in range(self.scan_length // self.sequence_length):
                 seq_data_idxs = np.zeros(shape=(self.scan_length,), dtype=np.bool)
                 seq_data_idxs[seq_i * self.sequence_length:(seq_i + 1) * self.sequence_length] = True
@@ -569,8 +569,9 @@ class TD3(OffPolicyRLModel):
                                            feed_dict_scan)
                     updated_states = {k: states[i] for i, k in enumerate(["pi_state", "qf1_state", "qf2_state"])}
                 batch_extra.update(updated_states)
-                self.replay_buffer.update_state([(idx[0], idx[1] - self.scan_length + self.sequence_length * seq_i)
-                                                 for idx in batch_extra["state_idxs_scan"]], updated_states)
+                if self.policy_tf.save_state:
+                    self.replay_buffer.update_state([(idx[0], idx[1] - self.scan_length + self.sequence_length * seq_i)
+                                                     for idx in batch_extra["state_idxs_scan"]], updated_states)
 
         feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items()})
 
@@ -593,7 +594,7 @@ class TD3(OffPolicyRLModel):
         else:
             out = self.sess.run(step_ops, feed_dict)
 
-        if self.recurrent_policy:
+        if self.recurrent_policy and self.policy_tf.save_state:
             if self.policy_tf.share_lstm:
                 states = {"state": out[5]}
             else:
@@ -745,7 +746,7 @@ class TD3(OffPolicyRLModel):
 
                 if hasattr(self.policy, "collect_data"):
                     extra_data.update(self.policy_tf_act.collect_data(locals(), globals()))
-                self.replay_buffer.add(obs, action, reward, new_obs, done, **extra_data)
+                self.replay_buffer.add(obs, action, reward, new_obs, done, **extra_data) # Extra data must be sent as kwargs to support separate bootstrap and done signals (needed for HER style algorithms)
                 episode_data.append({"obs": obs, "action": action, "reward": reward, "new_obs": new_obs, "done": done, **extra_data})
                 obs = new_obs
 
