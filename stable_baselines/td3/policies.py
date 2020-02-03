@@ -240,7 +240,7 @@ class RecurrentPolicy(TD3Policy):
 
         self.action_prev = np.zeros((1, *self.ac_space.shape))
 
-        if self.share_lstm:
+        if self.share_rnn:
             self.state = None
         else:
             self.pi_state = None
@@ -264,7 +264,7 @@ class RecurrentPolicy(TD3Policy):
 
         self.save_state = save_state
         if self.save_state:
-            if self.share_lstm:
+            if self.share_rnn:
                 self.extra_data_names = sorted(self.extra_data_names + ["state"])
                 self.extra_phs = sorted(self.extra_phs + ["state"])
             else:
@@ -638,37 +638,38 @@ class LarnnMlpPolicy(RecurrentPolicy):
                          share_rnn=share_rnn, layer_norm=layer_norm, act_fun=act_fun,
                          obs_module_indices=obs_module_indices, **kwargs)
 
-        self.rnn_inputs = sorted(self.rnn_inputs + ["obs", "action"])
         self.keras_reuse = True
         self._rnn_epsilon = rnn_epsilon
 
-
-    def make_actor(self, obs=None, dones=None, reuse=False, scope="pi"):
-        if obs is None:
-            obs = self.processed_obs
+    def make_actor(self, obs=None, action_prev=None, dones=None, reuse=False, scope="pi"):
+        obs, action_prev, dones = self._process_phs(obs=obs, action_prev=action_prev, dones=dones)
 
         ff_phs = None
-        rnn_phs = [obs]
+        rnn_phs = [obs, action_prev]
         return super().make_actor(ff_phs=ff_phs, rnn_phs=rnn_phs, dones=dones, reuse=reuse, scope=scope)
 
-    def make_critics(self, obs=None, action=None, dones=None, reuse=False, scope="values_fn"):
-        if obs is None:
-            obs = self.processed_obs
-        if action is None:
-            action = self.action_ph
+    def make_critics(self, obs=None, action=None, action_prev=None, dones=None, reuse=False, scope="values_fn"):
+        obs, action, action_prev, dones = self._process_phs(obs=obs, action=action, action_prev=action_prev,
+                                                            dones=dones)
 
-        ff_phs = None
-        rnn_phs = [obs, action]
+        ff_phs = [action]
+        rnn_phs = [obs, action_prev]
         return super().make_critics(ff_phs=ff_phs, rnn_phs=rnn_phs, dones=dones, reuse=reuse, scope=scope)
 
-    def step(self, obs, state=None, mask=None):
+    def step(self, obs, action_prev=None, state=None, mask=None):
         if state is None:
             state = self.initial_state
         if mask is None:
             mask = np.array([False])
+        if action_prev is None:
+            assert obs.shape[0] == 1
+            if mask[0]:
+                self.action_prev = np.zeros((1, *self.ac_space.shape))
+            action_prev = self.action_prev
 
         return self.sess.run([self.policy, self.pi_state],
-                             {self.obs_ph: obs, self.pi_state_ph: state, self.dones_ph: mask})
+                             {self.obs_ph: obs, self.action_prev_ph: action_prev,
+                              self.pi_state_ph: state, self.dones_ph: mask})
 
 
 class CnnPolicy(FeedForwardPolicy):
