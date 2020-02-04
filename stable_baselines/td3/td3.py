@@ -414,7 +414,7 @@ class TD3(OffPolicyRLModel):
             self.learning_rate_ph: learning_rate
         }
 
-        if self.recurrent_policy and self.scan_lengt > 0:
+        if self.recurrent_policy and self.scan_length > 0:
             default_data = {self.observations_ph: batch_extra.pop("scan_obs")}  # TODO: ensure that target network gets state calculated for that batch sample by main network, or fix separate target state saving and calculation
             if "scan_action" in batch_extra:
                 default_data[self.actions_ph] = batch_extra.pop("scan_action")
