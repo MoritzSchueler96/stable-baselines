@@ -310,14 +310,17 @@ class RecurrentPolicy(TD3Policy):
                 n_features = input_tensor.shape[-1].value
                 var_scope_name = tf.get_variable_scope().original_name_scope.split("/")[-2].split("_")[0]
                 if self._rnn_layer[var_scope_name] is None:
-                    larnn_cell = LinearAntisymmetricCell(self.n_rnn, step_size=self._rnn_epsilon)
-                    larnn_layer = tf.keras.layers.RNN(larnn_cell, return_state=True,
+                    larnn_cell = LinearAntisymmetricCell(self.n_rnn, step_size=self._rnn_epsilon, method="backward")
+                    larnn_layer = tf.keras.layers.RNN(larnn_cell, return_state=True, return_sequences=True,
                                                       input_shape=(None, self.n_steps, n_features))
                     self._rnn_layer[var_scope_name] = larnn_layer
                 else:
                     larnn_layer = self._rnn_layer[var_scope_name]
                 input_tensor = tf.reshape(input_tensor, (-1, self.n_steps, n_features))
+                dones = dones[::self.n_steps]
+                state_ph = tf.where(tf.cast(dones, dtype=np.bool), self.initial_state, state_ph)
                 input_tensor, state = larnn_layer(input_tensor, initial_state=state_ph)
+                input_tensor = tf.reshape(input_tensor, (-1, self.n_rnn))
             else:
                 raise ValueError
 
