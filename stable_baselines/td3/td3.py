@@ -448,7 +448,7 @@ class TD3(OffPolicyRLModel):
                     self.replay_buffer.update_state([(idx[0], idx[1] - self.scan_length + self.sequence_length * seq_i)
                                                      for idx in batch_extra["state_idxs_scan"]], updated_states)
         if self.recurrent_policy and not self.target_policy_tf.save_target_state:  # If target states are not saved to replay buffer and/or computed with scan then set target network hidden state to output from the previous network
-            if self.policy_tf.share_lstm:
+            if self.policy_tf.share_rnn:
                 state_names = ["state"]
             else:
                 state_names = ["pi_state", "qf1_state", "qf2_state"]
@@ -582,7 +582,7 @@ class TD3(OffPolicyRLModel):
                     extra_data.update(self.policy_tf_act.collect_data(locals(), globals()))
                     if self.policy_tf.save_target_state:
                         extra_data.update({"target_" + state_name: self.target_policy_tf.initial_state[0, :]
-                                           for state_name in (["state"] if self.target_policy_tf.share_lstm
+                                           for state_name in (["state"] if self.target_policy_tf.share_rnn
                                                               else ["pi_state", "qf1_state", "qf2_state"])})
                 self.replay_buffer.add(obs, action, reward, new_obs, done, **extra_data) # Extra data must be sent as kwargs to support separate bootstrap and done signals (needed for HER style algorithms)
                 episode_data.append({"obs": obs, "action": action, "reward": reward, "obs_tp1": new_obs, "done": done, **extra_data})

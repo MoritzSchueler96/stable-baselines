@@ -273,7 +273,7 @@ class RecurrentPolicy(TD3Policy):
             self.extra_phs = sorted(self.extra_phs + ["target_action_prev"])
 
         if self.save_state:
-            state_names = ["state"] if self.share_lstm else ["pi_state", "qf1_state", "qf2_state"]
+            state_names = ["state"] if self.share_rnn else ["pi_state", "qf1_state", "qf2_state"]
             if self.save_target_state:
                 state_names.extend(["target_" + state_name for state_name in state_names])
             if self.share_rnn:
