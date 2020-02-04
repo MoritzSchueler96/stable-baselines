@@ -187,14 +187,6 @@ class TD3(OffPolicyRLModel):
                                                             n_steps=sequence_length, **policy_tf_kwargs,
                                                             **self.policy_kwargs)
 
-                        # TODO: litta hack
-                        if self.policy_tf.share_lstm:
-                            self.target_policy_tf.state_ph = self.policy_tf.state_ph
-                        else:
-                            self.target_policy_tf.pi_state_ph = self.policy_tf.pi_state_ph
-                            self.target_policy_tf.qf1_state_ph = self.policy_tf.qf1_state_ph
-                            self.target_policy_tf.qf2_state_ph = self.policy_tf.qf2_state_ph
-
                         for ph_name in self.policy_tf.extra_phs:
                             if "target_" in ph_name:
                                 self.train_extra_phs[ph_name] = getattr(self.target_policy_tf, ph_name.replace("target_", "") + "_ph")
@@ -363,11 +355,17 @@ class TD3(OffPolicyRLModel):
                     # All ops to call during one training step
                     self.step_ops = [qf1_loss, qf2_loss,
                                      qf1, qf2, train_values_op]
-                    if self.recurrent_policy:
+                    if self.recurrent_policy and self.policy_tf.save_state:
                         if self.policy_tf.share_lstm:
-                            self.step_ops.append(self.policy_tf.state)
+                            state_objects = [self.policy_tf.state]
+                            if self.target_policy_tf.save_target_state:
+                                state_objects.append(self.target_policy_tf.state)
                         else:
-                            self.step_ops.extend([self.policy_tf.pi_state, self.policy_tf.qf1_state, self.policy_tf.qf2_state])
+                            state_objects = [self.policy_tf.pi_state, self.policy_tf.qf1_state, self.policy_tf.qf2_state]
+                            if self.target_policy_tf.save_target_state:
+                                state_objects.extend([self.target_policy_tf.pi_state, self.target_policy_tf.qf1_state,
+                                                      self.target_policy_tf.qf2_state])
+                        self.step_ops.extend(state_objects)
 
                     # Monitor losses and entropy in tensorboard
                     tf.summary.scalar("rew_loss", rew_loss)
@@ -406,26 +404,44 @@ class TD3(OffPolicyRLModel):
             self.learning_rate_ph: learning_rate
         }
 
-        if self.recurrent_policy and self.buffer_kwargs["scan_length"] > 0:  # TODO: find better condition here
+        if self.recurrent_policy and self.scan_length > 0:
             obs_scan = batch_extra.pop("scan_obs")  # TODO: ensure that target network gets state calculated for that batch sample by main network, or fix separate target state saving and calculation
+            if self.target_policy_tf.save_target_state:
+                obs_tp1_scan = batch_extra.pop("scan_obs_tp1")
             for seq_i in range(self.scan_length // self.sequence_length):
                 seq_data_idxs = np.zeros(shape=(self.scan_length,), dtype=np.bool)
                 seq_data_idxs[seq_i * self.sequence_length:(seq_i + 1) * self.sequence_length] = True
                 seq_data_idxs = np.tile(seq_data_idxs, self.batch_size // self.sequence_length)
                 feed_dict_scan = {self.observations_ph: obs_scan[seq_data_idxs]}
+                if self.target_policy_tf.save_target_state:
+                    feed_dict_scan[self.next_observations_ph] = obs_tp1_scan[seq_data_idxs]
                 feed_dict_scan.update({self.train_extra_phs[k.replace("scan_", "")]: v[seq_data_idxs]
                                        for k, v in batch_extra.items() if "scan_" in k})
                 if self.policy_tf.share_lstm:
-                    states = self.sess.run(self.policy_tf.state, feed_dict_scan)
-                    updated_states = {"state": states}
+                    state_objects = [self.policy_tf.state]
+                    state_names = ["state"]
+                    if self.target_policy_tf.save_target_state:
+                        state_objects.append(self.target_policy_tf.state)
+                        state_names.append("target_state")
                 else:
-                    states = self.sess.run([self.policy_tf.pi_state, self.policy_tf.qf1_state, self.policy_tf.qf2_state],
-                                           feed_dict_scan)
-                    updated_states = {k: states[i] for i, k in enumerate(["pi_state", "qf1_state", "qf2_state"])}
+                    state_objects = [self.policy_tf.pi_state, self.policy_tf.qf1_state, self.policy_tf.qf2_state]
+                    state_names = ["pi_state", "qf1_state", "qf2_state"]
+                    if self.target_policy_tf.save_target_state:
+                        state_objects.extend([self.target_policy_tf.pi_state, self.target_policy_tf.qf1_state,
+                                             self.target_policy_tf.qf2_state])
+                        state_names.extend(["target_" + state_name for state_name in state_names])
+                states = self.sess.run(state_objects, feed_dict_scan)
+                updated_states = {k: states[i] for i, k in enumerate(state_names)}
                 batch_extra.update(updated_states)
                 if self.policy_tf.save_state:
                     self.replay_buffer.update_state([(idx[0], idx[1] - self.scan_length + self.sequence_length * seq_i)
                                                      for idx in batch_extra["state_idxs_scan"]], updated_states)
+        if self.recurrent_policy and not self.target_policy_tf.save_target_state:  # If target states are not saved to replay buffer and/or computed with scan then set target network hidden state to output from the previous network
+            if self.policy_tf.share_lstm:
+                state_names = ["state"]
+            else:
+                state_names = ["pi_state", "qf1_state", "qf2_state"]
+            batch_extra.update({"target_" + state_name: getattr(self.policy_tf, state_name) for state_name in state_names})
 
         feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items()})
 
@@ -445,9 +461,12 @@ class TD3(OffPolicyRLModel):
 
         if self.recurrent_policy and self.policy_tf.save_state:
             if self.policy_tf.share_lstm:
-                states = {"state": out[5]}
+                state_names = ["state"]
             else:
-                states = {k: out[5+i] for i, k in enumerate(["pi_state", "qf1_state", "qf2_state"])}
+                state_names = ["pi_state", "qf1_state", "qf2_state"]
+            if self.target_policy_tf.save_target_state:
+                state_names.extend(["target_" + state_name for state_name in state_names])
+            states = {k: out[5 + i] for i, k in enumerate(state_names)}
             self.replay_buffer.update_state(batch_extra["state_idxs"], states)
 
         # Unpack to monitor losses
@@ -550,8 +569,12 @@ class TD3(OffPolicyRLModel):
 
                 if hasattr(self.policy, "collect_data"):
                     extra_data.update(self.policy_tf_act.collect_data(locals(), globals()))
+                    if self.policy_tf.save_target_state:
+                        extra_data.update({"target_" + state_name: self.target_policy_tf.initial_state[0, :]
+                                           for state_name in (["state"] if self.target_policy_tf.share_lstm
+                                                              else ["pi_state", "qf1_state", "qf2_state"])})
                 self.replay_buffer.add(obs, action, reward, new_obs, done, **extra_data) # Extra data must be sent as kwargs to support separate bootstrap and done signals (needed for HER style algorithms)
-                episode_data.append({"obs": obs, "action": action, "reward": reward, "new_obs": new_obs, "done": done, **extra_data})
+                episode_data.append({"obs": obs, "action": action, "reward": reward, "obs_tp1": new_obs, "done": done, **extra_data})
                 obs = new_obs
 
                 if ((replay_wrapper is not None and self.replay_buffer.replay_buffer.__name__ == "RankPrioritizedReplayBuffer")\
