@@ -205,7 +205,7 @@ class RecurrentPolicy(TD3Policy):
 
     def __init__(self, sess, ob_space, ac_space, layers, n_env=1, n_steps=1, n_batch=None, reuse=False,
                  cnn_extractor=nature_cnn, feature_extraction="mlp", n_lstm=128, share_lstm=False, save_state=False,
-                 layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
+                 save_target_state=False, layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
         super(RecurrentPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch,
                                                 reuse=reuse, add_action_ph=True,
                                                 scale=(feature_extraction == "cnn" and cnn_extractor == nature_cnn))
@@ -223,7 +223,8 @@ class RecurrentPolicy(TD3Policy):
         self.activ_fn = act_fun
         self.n_lstm = n_lstm
         self.share_lstm = share_lstm
-        self._obs_ph = self.processed_obs
+        self._obs_ph = self.processed_obs  # Base class has self.obs_ph as property getting self._obs_ph
+        self.obs_tp1_ph = self.processed_obs
 
         assert self.n_batch % self.n_steps == 0, "The batch size must be a multiple of sequence length (n_steps)"
         self._lstm_n_batch = self.n_batch // self.n_steps
@@ -249,18 +250,28 @@ class RecurrentPolicy(TD3Policy):
 
             self.action_prev_ph = tf.placeholder(np.float32, (self.n_batch, *self.ac_space.shape), name="action_prev_ph")
 
+        self.save_state = save_state
+        self.save_target_state = save_target_state
+
         self.extra_phs = ["action_prev"]
         self.rnn_inputs = ["obs", "action_prev"]
         self.extra_data_names = ["action_prev"]
 
-        self.save_state = save_state
+        if self.save_target_state:
+            self.extra_data_names = sorted(self.extra_data_names + ["target_action_prev"])
+            self.rnn_inputs = sorted(self.rnn_inputs + ["obs_tp1"])
+            self.extra_phs = sorted(self.extra_phs + ["target_action_prev"])
+
         if self.save_state:
+            state_names = ["state"] if self.share_lstm else ["pi_state", "qf1_state", "qf2_state"]
+            if self.save_target_state:
+                state_names.extend(["target_" + state_name for state_name in state_names])
             if self.share_lstm:
-                self.extra_data_names = sorted(self.extra_data_names + ["state"])
-                self.extra_phs = sorted(self.extra_phs + ["state"])
+                self.extra_data_names = sorted(self.extra_data_names + state_names)
+                self.extra_phs = sorted(self.extra_phs + state_names)
             else:
-                self.extra_data_names = sorted(self.extra_data_names + ["pi_state", "qf1_state", "qf2_state"])
-                self.extra_phs = sorted(self.extra_phs + ["pi_state", "qf1_state", "qf2_state"])
+                self.extra_data_names = sorted(self.extra_data_names + state_names)
+                self.extra_phs = sorted(self.extra_phs + state_names)
 
     def _process_phs(self, **phs):
         for ph_name, ph_val in phs.items():
@@ -398,7 +409,8 @@ class RecurrentPolicy(TD3Policy):
         else:
             data["action_prev"] = _locals["episode_data"][-1]["action"]
 
-        #data["target_action_prev_rnn"] = _locals["action"]
+        if self.save_target_state:
+            data["target_action_prev_rnn"] = _locals["action"]
 
         return data
 
