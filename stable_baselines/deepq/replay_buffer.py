@@ -101,7 +101,7 @@ class ReplayBuffer(object):
 class RecurrentReplayBuffer(ReplayBuffer):
     __name__ = "RecurrentReplayBuffer"
 
-    def __init__(self, size, sequence_length=1, scan_length=0, extra_data_names=(), rnn_inputs=(), her_k=4):
+    def __init__(self, size, sequence_length=1, scan_length=0, extra_data_names=(), rnn_inputs=(), her_k=0):
         super().__init__(size)
         self._sample_cycle = 0
         self.her_k = her_k
