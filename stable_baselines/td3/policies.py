@@ -264,13 +264,12 @@ class RecurrentPolicy(TD3Policy):
         self.save_state = save_state
         self.save_target_state = save_target_state
 
-        self.extra_phs = ["action_prev"]
-        self.rnn_inputs = ["obs", "action_prev"]
-        self.extra_data_names = ["action_prev"]
+        self.extra_phs = ["action_prev", "target_action_prev"]
+        self.rnn_inputs = ["obs", "action_prev"]  # TODO: rename to scan data?
+        self.extra_data_names = ["action_prev", "target_action_prev"]
 
         if self.save_target_state:
-            self.extra_data_names = sorted(self.extra_data_names + ["target_action_prev"])
-            self.rnn_inputs = sorted(self.rnn_inputs + ["obs_tp1"])
+            self.rnn_inputs = sorted(self.rnn_inputs + ["obs_tp1", "target_action_prev"])
 
         if self.save_state:
             state_names = ["state"] if self.share_rnn else ["pi_state", "qf1_state", "qf2_state"]
@@ -455,7 +454,7 @@ class RecurrentPolicy(TD3Policy):
                         self.qf2_state_ph: _locals["episode_data"][-1]["qf2_state"][None],
                     }
                     qf_feed_dict.update({getattr(self, data_name + "_ph"): _locals["episode_data"][-1][data_name][None]
-                                         for data_name in self.rnn_inputs})
+                                         for data_name in self.rnn_inputs if "target" not in data_name})
                     qf1_state, qf2_state = self.sess.run([self.qf1_state, self.qf2_state], feed_dict=qf_feed_dict)
                 data["qf1_state"] = qf1_state[0, :]
                 data["qf2_state"] = qf2_state[0, :]
@@ -465,8 +464,7 @@ class RecurrentPolicy(TD3Policy):
         else:
             data["action_prev"] = _locals["episode_data"][-1]["action"]
 
-        if self.save_target_state:
-            data["target_action_prev_rnn"] = _locals["action"]
+        data["target_action_prev"] = _locals["action"]
 
         return data
 
