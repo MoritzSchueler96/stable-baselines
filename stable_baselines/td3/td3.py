@@ -182,6 +182,7 @@ class TD3(OffPolicyRLModel):
                         if scan_length > 0:
                             state_phs = "main"
                         if self.target_state_from_main:
+                            assert self.policy_kwargs is None or not self.policy_kwargs.get("save_target_state", False)
                             state_phs = "target" if state_phs is None else "both"
 
                         self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
