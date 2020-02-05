@@ -277,8 +277,7 @@ class TD3(OffPolicyRLModel):
                     if self.recurrent_policy:
                         # Create target networks
                         target_policy_out = self.target_policy_tf.make_actor(self.processed_next_obs_ph,
-                                                                             **actor_kws,
-                                                                             dones=self.dones_ph)
+                                                                             dones=self.dones_ph)  # TODO: maybe not self.dones? maybe should be one later idk.
                         # Target policy smoothing, by adding clipped noise to target actions
                         target_noise = tf.random_normal(tf.shape(target_policy_out), stddev=self.target_policy_noise)
                         target_noise = tf.clip_by_value(target_noise, -self.target_noise_clip, self.target_noise_clip)
@@ -287,8 +286,7 @@ class TD3(OffPolicyRLModel):
                         # Q values when following the target policy
                         qf1_target, qf2_target = self.target_policy_tf.make_critics(self.processed_next_obs_ph,
                                                                                     noisy_target_action,
-                                                                                    dones=self.dones_ph,
-                                                                                    **critic_kws)
+                                                                                    dones=self.dones_ph)
                     else:
                         # Create target networks
                         target_policy_out = self.target_policy_tf.make_actor(self.processed_next_obs_ph)
