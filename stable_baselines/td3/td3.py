@@ -438,20 +438,24 @@ class TD3(OffPolicyRLModel):
                         state_objects.extend([self.target_policy_tf.pi_state, self.target_policy_tf.qf1_state,
                                              self.target_policy_tf.qf2_state])
                         state_names.extend(["target_" + state_name for state_name in state_names])
+                feed_dict_scan.update({self.train_extra_phs[name]: batch_extra[name] for name in state_names})
                 states = self.sess.run(state_objects, feed_dict_scan)
                 updated_states = {k: states[i] for i, k in enumerate(state_names)}
                 batch_extra.update(updated_states)
                 if self.policy_tf.save_state:
-                    self.replay_buffer.update_state([(idx[0], idx[1] - self.scan_length + self.sequence_length * seq_i)
+                    self.replay_buffer.update_state([(idx[0], idx[1] - self.scan_length + self.sequence_length * seq_i + 1)
                                                      for idx in batch_extra["state_idxs_scan"]], updated_states)
-        if self.target_state_from_main:  # If target states are not saved to replay buffer and/or computed with scan then set target network hidden state to output from the previous network
+
+        if self.target_state_from_main:  # If target states are not saved to replay buffer and/or computed with scan then set target network hidden state to output from the main network
+            feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items() if not all(n in k for n in ["target", "state"])})
             if self.policy_tf.share_lstm:
                 state_names = ["state"]
             else:
                 state_names = ["pi_state", "qf1_state", "qf2_state"]
-            batch_extra.update({"target_" + state_name: getattr(self.policy_tf, state_name) for state_name in state_names})
-
-        feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items()})
+            main_states = self.sess.run([getattr(self.policy_tf, state_name) for state_name in state_names], feed_dict)
+            feed_dict.update({self.train_extra_phs["target_" + k]: main_states[i] for i, k in enumerate(state_names)})
+        else:
+            feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items()})
 
         step_ops = self.step_ops
         if update_policy:
