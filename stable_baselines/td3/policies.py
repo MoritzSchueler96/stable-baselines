@@ -379,8 +379,29 @@ class RecurrentPolicy(TD3Policy):
 
         return self.qf1, self.qf2
 
-    def step(self, obs, state=None, mask=None):
-        raise NotImplementedError
+    def step(self, obs, action_prev=None, state=None, mask=None, feed_dict=None, **kwargs):
+        if feed_dict is None:
+            feed_dict = {}
+        if state is None:
+            state = self.initial_state
+        if mask is None:
+            mask = np.array([False])
+        if action_prev is None:
+            assert obs.shape[0] == 1
+            if mask[0]:
+                self.action_prev = np.zeros((1, *self.ac_space.shape))
+            action_prev = self.action_prev
+
+        rnn_node = self.state if self.share_lstm else self.pi_state
+        state_ph = self.state_ph if self.share_lstm else self.pi_state_ph
+
+        feed_dict.update({self.obs_ph: obs, state_ph: state, self.dones_ph: mask,
+                                      self.action_prev_ph: action_prev})
+
+        action, out_state = self.sess.run([self.policy, rnn_node], feed_dict)
+        self.action_prev = action
+
+        return action, out_state
 
     @property
     def initial_state(self):
@@ -491,25 +512,6 @@ class DRPolicy(RecurrentPolicy):
         rnn_phs = [obs_rnn, action_prev]
         return super().make_critics(ff_phs=ff_phs, rnn_phs=rnn_phs, dones=dones, reuse=reuse, scope=scope)
 
-    def step(self, obs, state=None, action_prev=None, mask=None):
-        if state is None:
-            state = self.initial_state
-        if action_prev is None:
-            assert obs.shape[0] == 1
-            if mask[0]:
-                self.action_prev = np.zeros((1, *self.ac_space.shape))
-            action_prev = self.action_prev
-
-        lstm_node = self.state if self.share_lstm else self.pi_state
-        state_ph = self.state_ph if self.share_lstm else self.pi_state_ph
-
-        action, out_state = self.sess.run([self.policy, lstm_node],
-                            {self.obs_ph: obs, state_ph: state, self.dones_ph: mask,
-                            self.action_prev_ph: action_prev})
-        self.action_prev = action
-
-        return action, out_state
-
     def collect_data(self, _locals, _globals, **kwargs):
         data = super().collect_data(_locals, _globals)
         if "my" not in _locals or _locals["ep_data"]:
@@ -549,21 +551,6 @@ class LstmMlpPolicy(RecurrentPolicy):
         rnn_phs = [obs, action_prev]
         return super().make_critics(ff_phs=ff_phs, rnn_phs=rnn_phs, dones=dones, reuse=reuse, scope=scope)
 
-    def step(self, obs, action_prev=None, state=None, mask=None):
-        if state is None:
-            state = self.initial_state
-        if mask is None:
-            mask = np.array([False])
-        if action_prev is None:
-            assert obs.shape[0] == 1
-            if mask[0]:
-                self.action_prev = np.zeros((1, *self.ac_space.shape))
-            action_prev = self.action_prev
-
-        return self.sess.run([self.policy, self.pi_state],
-                             {self.obs_ph: obs, self.action_prev_ph: action_prev,
-                              self.pi_state_ph: state, self.dones_ph: mask})
-
 
 class LstmFFMlpPolicy(RecurrentPolicy):
     recurrent = True
@@ -594,21 +581,6 @@ class LstmFFMlpPolicy(RecurrentPolicy):
         ff_phs = [obs, action]
         rnn_phs = [obs, action_prev]
         return super().make_critics(ff_phs=ff_phs, rnn_phs=rnn_phs, dones=dones, reuse=reuse, scope=scope)
-
-    def step(self, obs, action_prev=None, state=None, mask=None):
-        if state is None:
-            state = self.initial_state
-        if mask is None:
-            mask = np.array([False])
-        if action_prev is None:
-            assert obs.shape[0] == 1
-            if mask[0]:
-                self.action_prev = np.zeros((1, *self.ac_space.shape))
-            action_prev = self.action_prev
-
-        return self.sess.run([self.policy, self.pi_state],
-                             {self.obs_ph: obs, self.action_prev_ph: action_prev,
-                              self.pi_state_ph: state, self.dones_ph: mask})
 
 
 class CnnPolicy(FeedForwardPolicy):
