@@ -64,7 +64,7 @@ class TD3(OffPolicyRLModel):
                  target_policy_noise=0.2, target_noise_clip=0.5,
                  random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, time_aware=False,
-                 reward_transformation=None, ):
+                 reward_transformation=None, target_state_from_main=False):
 
         super(TD3, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=TD3Policy, requires_vec_env=False, policy_kwargs=policy_kwargs)
@@ -133,6 +133,7 @@ class TD3(OffPolicyRLModel):
             self.dones_ph = None
             self.sequence_length = None
             self.scan_length = None
+            self.target_state_from_main = target_state_from_main
 
         self.train_extra_phs = {}
 
@@ -172,12 +173,21 @@ class TD3(OffPolicyRLModel):
 
                         if self.buffer_kwargs is not None:
                             sequence_length = self.buffer_kwargs.get("sequence_length", 1)
+                            scan_length = self.buffer_kwargs.get("scan_length", 0)
                         else:
                             sequence_length = 1
+                            scan_length = 0
+
+                        state_phs = None
+                        if scan_length > 0:
+                            state_phs = "main"
+                        if self.target_state_from_main:
+                            state_phs = "target" if state_phs is None else "both"
 
                         self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
                                                      n_batch=self.batch_size,
                                                      n_steps=sequence_length,
+                                                     add_state_phs=state_phs,
                                                      **policy_tf_kwargs, **self.policy_kwargs)
                         self.policy_tf_act = self.policy(self.sess, self.observation_space, self.action_space,
                                                          n_batch=1, **policy_tf_kwargs,
@@ -447,7 +457,8 @@ class TD3(OffPolicyRLModel):
                 if self.policy_tf.save_state:
                     self.replay_buffer.update_state([(idx[0], idx[1] - self.scan_length + self.sequence_length * seq_i)
                                                      for idx in batch_extra["state_idxs_scan"]], updated_states)
-        if self.recurrent_policy and not self.target_policy_tf.save_target_state:  # If target states are not saved to replay buffer and/or computed with scan then set target network hidden state to output from the previous network
+
+        if self.target_state_from_main:  # If target states are not saved to replay buffer and/or computed with scan then set target network hidden state to output from the previous network
             if self.policy_tf.share_rnn:
                 state_names = ["state"]
             else:
