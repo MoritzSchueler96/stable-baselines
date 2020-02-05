@@ -207,7 +207,7 @@ class RecurrentPolicy(TD3Policy):
 
     def __init__(self, sess, ob_space, ac_space, layers, n_env=1, n_steps=1, n_batch=None, reuse=False,
                  cnn_extractor=nature_cnn, feature_extraction="mlp", n_lstm=128, share_lstm=False, save_state=False,
-                 layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
+                 save_target_state=False, layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
         super(RecurrentPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch,
                                                 reuse=reuse, add_action_ph=True,
                                                 scale=(feature_extraction == "cnn" and cnn_extractor == nature_cnn))
@@ -225,7 +225,8 @@ class RecurrentPolicy(TD3Policy):
         self.activ_fn = act_fun
         self.n_lstm = n_lstm
         self.share_lstm = share_lstm
-        self._obs_ph = self.processed_obs
+        self._obs_ph = self.processed_obs  # Base class has self.obs_ph as property getting self._obs_ph
+        self.obs_tp1_ph = self.processed_obs
 
         assert self.n_batch % self.n_steps == 0, "The batch size must be a multiple of sequence length (n_steps)"
         self._lstm_n_batch = self.n_batch // self.n_steps
@@ -251,18 +252,28 @@ class RecurrentPolicy(TD3Policy):
 
             self.action_prev_ph = tf.placeholder(np.float32, (self.n_batch, *self.ac_space.shape), name="action_prev_ph")
 
+        self.save_state = save_state
+        self.save_target_state = save_target_state
+
         self.extra_phs = ["action_prev"]
         self.rnn_inputs = ["obs", "action_prev"]
         self.extra_data_names = ["action_prev"]
 
-        self.save_state = save_state
+        if self.save_target_state:
+            self.extra_data_names = sorted(self.extra_data_names + ["target_action_prev"])
+            self.rnn_inputs = sorted(self.rnn_inputs + ["obs_tp1"])
+            self.extra_phs = sorted(self.extra_phs + ["target_action_prev"])
+
         if self.save_state:
+            state_names = ["state"] if self.share_lstm else ["pi_state", "qf1_state", "qf2_state"]
+            if self.save_target_state:
+                state_names.extend(["target_" + state_name for state_name in state_names])
             if self.share_lstm:
-                self.extra_data_names = sorted(self.extra_data_names + ["state"])
-                self.extra_phs = sorted(self.extra_phs + ["state"])
+                self.extra_data_names = sorted(self.extra_data_names + state_names)
+                self.extra_phs = sorted(self.extra_phs + state_names)
             else:
-                self.extra_data_names = sorted(self.extra_data_names + ["pi_state", "qf1_state", "qf2_state"])
-                self.extra_phs = sorted(self.extra_phs + ["pi_state", "qf1_state", "qf2_state"])
+                self.extra_data_names = sorted(self.extra_data_names + state_names)
+                self.extra_phs = sorted(self.extra_phs + state_names)
 
     def _process_phs(self, **phs):
         for ph_name, ph_val in phs.items():
@@ -368,8 +379,29 @@ class RecurrentPolicy(TD3Policy):
 
         return self.qf1, self.qf2
 
-    def step(self, obs, state=None, mask=None):
-        raise NotImplementedError
+    def step(self, obs, action_prev=None, state=None, mask=None, feed_dict=None, **kwargs):
+        if feed_dict is None:
+            feed_dict = {}
+        if state is None:
+            state = self.initial_state
+        if mask is None:
+            mask = np.array([False])
+        if action_prev is None:
+            assert obs.shape[0] == 1
+            if mask[0]:
+                self.action_prev = np.zeros((1, *self.ac_space.shape))
+            action_prev = self.action_prev
+
+        rnn_node = self.state if self.share_lstm else self.pi_state
+        state_ph = self.state_ph if self.share_lstm else self.pi_state_ph
+
+        feed_dict.update({self.obs_ph: obs, state_ph: state, self.dones_ph: mask,
+                                      self.action_prev_ph: action_prev})
+
+        action, out_state = self.sess.run([self.policy, rnn_node], feed_dict)
+        self.action_prev = action
+
+        return action, out_state
 
     @property
     def initial_state(self):
@@ -400,7 +432,8 @@ class RecurrentPolicy(TD3Policy):
         else:
             data["action_prev"] = _locals["episode_data"][-1]["action"]
 
-        #data["target_action_prev_rnn"] = _locals["action"]
+        if self.save_target_state:
+            data["target_action_prev_rnn"] = _locals["action"]
 
         return data
 
@@ -479,25 +512,6 @@ class DRPolicy(RecurrentPolicy):
         rnn_phs = [obs_rnn, action_prev]
         return super().make_critics(ff_phs=ff_phs, rnn_phs=rnn_phs, dones=dones, reuse=reuse, scope=scope)
 
-    def step(self, obs, state=None, action_prev=None, mask=None):
-        if state is None:
-            state = self.initial_state
-        if action_prev is None:
-            assert obs.shape[0] == 1
-            if mask[0]:
-                self.action_prev = np.zeros((1, *self.ac_space.shape))
-            action_prev = self.action_prev
-
-        lstm_node = self.state if self.share_lstm else self.pi_state
-        state_ph = self.state_ph if self.share_lstm else self.pi_state_ph
-
-        action, out_state = self.sess.run([self.policy, lstm_node],
-                            {self.obs_ph: obs, state_ph: state, self.dones_ph: mask,
-                            self.action_prev_ph: action_prev})
-        self.action_prev = action
-
-        return action, out_state
-
     def collect_data(self, _locals, _globals, **kwargs):
         data = super().collect_data(_locals, _globals)
         if "my" not in _locals or _locals["ep_data"]:
@@ -537,21 +551,6 @@ class LstmMlpPolicy(RecurrentPolicy):
         rnn_phs = [obs, action_prev]
         return super().make_critics(ff_phs=ff_phs, rnn_phs=rnn_phs, dones=dones, reuse=reuse, scope=scope)
 
-    def step(self, obs, action_prev=None, state=None, mask=None):
-        if state is None:
-            state = self.initial_state
-        if mask is None:
-            mask = np.array([False])
-        if action_prev is None:
-            assert obs.shape[0] == 1
-            if mask[0]:
-                self.action_prev = np.zeros((1, *self.ac_space.shape))
-            action_prev = self.action_prev
-
-        return self.sess.run([self.policy, self.pi_state],
-                             {self.obs_ph: obs, self.action_prev_ph: action_prev,
-                              self.pi_state_ph: state, self.dones_ph: mask})
-
 
 class LstmFFMlpPolicy(RecurrentPolicy):
     recurrent = True
@@ -582,21 +581,6 @@ class LstmFFMlpPolicy(RecurrentPolicy):
         ff_phs = [obs, action]
         rnn_phs = [obs, action_prev]
         return super().make_critics(ff_phs=ff_phs, rnn_phs=rnn_phs, dones=dones, reuse=reuse, scope=scope)
-
-    def step(self, obs, action_prev=None, state=None, mask=None):
-        if state is None:
-            state = self.initial_state
-        if mask is None:
-            mask = np.array([False])
-        if action_prev is None:
-            assert obs.shape[0] == 1
-            if mask[0]:
-                self.action_prev = np.zeros((1, *self.ac_space.shape))
-            action_prev = self.action_prev
-
-        return self.sess.run([self.policy, self.pi_state],
-                             {self.obs_ph: obs, self.action_prev_ph: action_prev,
-                              self.pi_state_ph: state, self.dones_ph: mask})
 
 
 class CnnPolicy(FeedForwardPolicy):
