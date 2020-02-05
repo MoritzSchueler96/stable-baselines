@@ -205,7 +205,7 @@ class RecurrentPolicy(TD3Policy):
         """
     recurrent = True
 
-    def __init__(self, sess, ob_space, ac_space, layers, n_env=1, n_steps=1, n_batch=None, reuse=False,
+    def __init__(self, sess, ob_space, ac_space, layers, n_env=1, n_steps=1, n_batch=None, add_state_phs=None, reuse=False,
                  cnn_extractor=nature_cnn, feature_extraction="mlp", n_lstm=128, share_lstm=False, save_state=False,
                  save_target_state=False, layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
         super(RecurrentPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch,
@@ -262,7 +262,6 @@ class RecurrentPolicy(TD3Policy):
         if self.save_target_state:
             self.extra_data_names = sorted(self.extra_data_names + ["target_action_prev"])
             self.rnn_inputs = sorted(self.rnn_inputs + ["obs_tp1"])
-            self.extra_phs = sorted(self.extra_phs + ["target_action_prev"])
 
         if self.save_state:
             state_names = ["state"] if self.share_lstm else ["pi_state", "qf1_state", "qf2_state"]
@@ -270,10 +269,17 @@ class RecurrentPolicy(TD3Policy):
                 state_names.extend(["target_" + state_name for state_name in state_names])
             if self.share_lstm:
                 self.extra_data_names = sorted(self.extra_data_names + state_names)
-                self.extra_phs = sorted(self.extra_phs + state_names)
             else:
                 self.extra_data_names = sorted(self.extra_data_names + state_names)
-                self.extra_phs = sorted(self.extra_phs + state_names)
+
+        if self.save_state or add_state_phs is not None or self.save_target_state:
+            phs_to_add = []
+            if self.save_state or add_state_phs in ["main", "both"]:
+                phs_to_add.extend(["pi_state", "qf1_state", "qf2_state"])
+            if self.save_target_state or add_state_phs in ["target", "both"]:
+                phs_to_add.extend(["target_pi_state", "target_qf1_state", "target_qf2_state"])
+
+            self.extra_phs = sorted(self.extra_phs + phs_to_add)
 
     def _process_phs(self, **phs):
         for ph_name, ph_val in phs.items():
