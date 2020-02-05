@@ -310,7 +310,7 @@ class RecurrentPolicy(TD3Policy):
                 n_features = input_tensor.shape[-1].value
                 var_scope_name = tf.get_variable_scope().original_name_scope.split("/")[-2].split("_")[0]
                 if self._rnn_layer[var_scope_name] is None:
-                    larnn_cell = LinearAntisymmetricCell(self.n_rnn, step_size=self._rnn_epsilon, method="backward")
+                    larnn_cell = LinearAntisymmetricCell(self.n_rnn, step_size=self._rnn_epsilon, method=self._rnn_method)
                     larnn_layer = tf.keras.layers.RNN(larnn_cell, return_state=True, return_sequences=True,
                                                       input_shape=(None, self.n_steps, n_features))
                     self._rnn_layer[var_scope_name] = larnn_layer
@@ -615,7 +615,7 @@ class LarnnMlpPolicy(RecurrentPolicy):
 
     def __init__(self, sess, ob_space, ac_space, rnn_epsilon, n_env=1, n_steps=1, n_batch=None, reuse=False,
                  layers=None, cnn_extractor=nature_cnn, feature_extraction="mlp", n_rnn=128, share_rnn=False,
-                 layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
+                 layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, rnn_method="midpoint", **kwargs):
         if layers is None:
             layers = {"ff": None, "rnn": [64, 64], "head": []}
         else:
@@ -628,6 +628,7 @@ class LarnnMlpPolicy(RecurrentPolicy):
 
         self.keras_reuse = True
         self._rnn_epsilon = rnn_epsilon
+        self._rnn_method = rnn_method
 
     def make_actor(self, obs=None, action_prev=None, dones=None, reuse=False, scope="pi"):
         obs, action_prev, dones = self._process_phs(obs=obs, action_prev=action_prev, dones=dones)
