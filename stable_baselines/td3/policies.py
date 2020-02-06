@@ -209,7 +209,7 @@ class RecurrentPolicy(TD3Policy):
     
     def __init__(self, sess, ob_space, ac_space, layers, n_env=1, n_steps=1, n_batch=None, add_state_phs=None, reuse=False,
                  cnn_extractor=nature_cnn, feature_extraction="mlp", n_rnn=128, share_rnn=False, save_state=False,
-                 save_target_state=False, rnn_type="lstm", layer_norm=False, act_fun=tf.nn.relu,
+                 save_target_state=False, rnn_type="lstm", layer_norm=False, act_fun=tf.nn.relu, print_tensors=False,
                  obs_module_indices=None, **kwargs):
 
         super(RecurrentPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch,
@@ -229,17 +229,19 @@ class RecurrentPolicy(TD3Policy):
         self.keras_reuse = False
         self._rnn_layer = {"pi": None, "qf1": None, "qf2": None}
 
+        self.print_tensors = print_tensors
+
         self.activ_fn = act_fun
         self.n_rnn = n_rnn
         self.share_rnn = share_rnn
         self._obs_ph = self.processed_obs
         self.obs_tp1_ph = self.processed_obs
 
-        assert self.n_batch % self.n_steps == 0, "The batch size must be a multiple of sequence length (n_steps)"
-        self._rnn_n_batch = self.n_batch // self.n_steps
-        _state_shape = (self._rnn_n_batch, self.n_rnn * 2 if self.rnn_type == "lstm" else self.n_rnn)
+        #assert self.n_batch % self.n_steps == 0, "The batch size must be a multiple of sequence length (n_steps)"
+        #self._rnn_n_batch = self.n_batch // self.n_steps
+        _state_shape = self.n_rnn * 2 if self.rnn_type == "lstm" else self.n_rnn
 
-        self._initial_state = np.zeros((_state_shape), dtype=np.float32)
+        self._initial_state = np.zeros((1, _state_shape), dtype=np.float32)
 
         self.action_prev = np.zeros((1, *self.ac_space.shape))
 
@@ -251,13 +253,13 @@ class RecurrentPolicy(TD3Policy):
             self.qf2_state = None
 
         with tf.variable_scope("input", reuse=False):
-            self.dones_ph = tf.placeholder_with_default(np.zeros((self.n_batch,), dtype=np.float32), (self.n_batch,), name="dones_ph")  # (done t-1)
+            self.dones_ph = tf.placeholder(tf.float32, (self.n_batch,), name="dones_ph")  # (done t-1)
             if self.share_rnn:
-                self.state_ph = tf.placeholder_with_default(self.initial_state, _state_shape, name="state_ph")
+                self.state_ph = tf.placeholder(tf.float32, (self.n_batch, _state_shape), name="state_ph")
             else:
-                self.pi_state_ph = tf.placeholder_with_default(self.initial_state, _state_shape, name="pi_state_ph")
-                self.qf1_state_ph = tf.placeholder_with_default(self.initial_state, _state_shape, name="qf1_state_ph")
-                self.qf2_state_ph = tf.placeholder_with_default(self.initial_state, _state_shape, name="qf2_state_ph")
+                self.pi_state_ph = tf.placeholder(tf.float32, (self.n_batch, _state_shape), name="pi_state_ph")
+                self.qf1_state_ph = tf.placeholder(tf.float32, (self.n_batch, _state_shape), name="qf1_state_ph")
+                self.qf2_state_ph = tf.placeholder(tf.float32, (self.n_batch, _state_shape), name="qf2_state_ph")
 
             self.action_prev_ph = tf.placeholder(np.float32, (self.n_batch, *self.ac_space.shape), name="action_prev_ph")
 
@@ -299,6 +301,9 @@ class RecurrentPolicy(TD3Policy):
                 except AttributeError:
                     setattr(self, "_" + ph_name + "_ph", ph_val)
 
+            if self.print_tensors:
+                phs[ph_name] = tf.Print(phs[ph_name], [phs[ph_name]], "{}: ".format(ph_name))
+
         return phs.values()
 
     def _make_branch(self, branch_name, input_tensor, dones=None, state_ph=None):
@@ -324,8 +329,14 @@ class RecurrentPolicy(TD3Policy):
                     larnn_layer = self._rnn_layer[var_scope_name]
                 input_tensor = tf.reshape(input_tensor, (-1, self.n_steps, n_features))
                 dones = dones[::self.n_steps]
-                state_ph = tf.where(tf.cast(dones, dtype=np.bool), self.initial_state, state_ph)
+                if self.print_tensors:
+                    state_ph = tf.Print(state_ph, [state_ph], "State in: ")
+                #state_ph = tf.where(tf.cast(dones, dtype=np.bool),
+                #                    tf.keras.backend.repeat_elements(self.initial_state, state_ph.shape[0].value, axis=0),
+                #                    state_ph)  # TODO: implement done functionality
                 input_tensor, state = larnn_layer(input_tensor, initial_state=state_ph)
+                if self.print_tensors:
+                    state = tf.Print(state, [state], "State out: ")
                 input_tensor = tf.reshape(input_tensor, (-1, self.n_rnn))
             else:
                 raise ValueError
@@ -363,8 +374,8 @@ class RecurrentPolicy(TD3Policy):
 
             head = self._make_branch("head", head)
 
-            self.policy_pre_activation = tf.layers.dense(head, self.ac_space.shape[0])
-            self.policy = policy = tf.tanh(self.policy_pre_activation)
+            self.policy_pre_activation = tf.layers.dense(head, self.ac_space.shape[0], name="pi_pre_activation")
+            self.policy = policy = tf.tanh(self.policy_pre_activation, name="pi_activation")
 
         return policy
 

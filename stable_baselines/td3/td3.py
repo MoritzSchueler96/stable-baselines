@@ -186,15 +186,15 @@ class TD3(OffPolicyRLModel):
                             state_phs = "target" if state_phs is None else "both"
 
                         self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
-                                                     n_batch=self.batch_size,
-                                                     n_steps=sequence_length,
+                                                     n_batch=None,
+                                                     n_steps=sequence_length, print_tensors=True,
                                                      add_state_phs=state_phs,
                                                      **policy_tf_kwargs, **self.policy_kwargs)
-                        self.policy_tf_act = self.policy(self.sess, self.observation_space, self.action_space,
-                                                         n_batch=1, **policy_tf_kwargs,
-                                                         **self.policy_kwargs)
+                        #self.policy_tf_act = self.policy(self.sess, self.observation_space, self.action_space,
+                        #                                 n_batch=1, **policy_tf_kwargs, print_tensors=True,
+                        #                                 **self.policy_kwargs)
                         self.target_policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
-                                                            n_batch=self.batch_size,
+                                                            n_batch=None,
                                                             n_steps=sequence_length, **policy_tf_kwargs,
                                                             **self.policy_kwargs)
 
@@ -261,20 +261,18 @@ class TD3(OffPolicyRLModel):
 
                         if self.policy_tf.keras_reuse:  # TODO: fix hacky keras reuse bandaid
                             self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph, **actor_kws)
-                            self.policy_tf_act._rnn_layer = self.policy_tf._rnn_layer
-                            self.policy_act = policy_act = self.policy_tf_act.make_actor(reuse=True)
+                            #self.policy_tf_act._rnn_layer = self.policy_tf._rnn_layer
+                            #self.policy_act = policy_act = self.policy_tf_act.make_actor(reuse=True)
+                            self.policy_tf_act = self.policy_tf
                         else:
                             self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph, **actor_kws)
                             self.policy_act = policy_act = self.policy_tf_act.make_actor(reuse=True)
                         # Use two Q-functions to improve performance by reducing overestimation bias
-                        qf1, qf2 = self.policy_tf.make_critics(self.processed_obs_ph, self.actions_ph, **critic_kws)
+                        qf1, qf2 = self.policy_tf.make_critics(self.processed_obs_ph, action=self.actions_ph, **critic_kws)
                         _, _ = self.policy_tf_act.make_critics(None, self.actions_ph, reuse=True)
                         # Q value when following the current policy
-                        qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph, policy_out, **critic_kws,
+                        qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph, action=policy_out, **critic_kws,
                                                                      reuse=True)
-                        if self.policy_tf.keras_reuse:
-                            self.policy_tf_act._action_ph = tf.placeholder(dtype=self.policy_tf_act.ac_space.dtype, shape=(1,) + self.policy_tf_act.ac_space.shape, name="action_ph")
-                            _, _ = self.policy_tf_act.make_critics(reuse=True)
                     else:
                         self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph)
                         # Use two Q-functions to improve performance by reducing overestimation bias
@@ -282,6 +280,8 @@ class TD3(OffPolicyRLModel):
                         # Q value when following the current policy
                         qf1_pi, qf2_pi = self.policy_tf.make_critics(self.processed_obs_ph,
                                                                 policy_out, reuse=True)
+
+                self.qf1, self.qf2, self.qf1_pi, self.qf2_pi = qf1, qf2, qf1_pi, qf2_pi
 
                 with tf.variable_scope("target", reuse=False):
                     if self.recurrent_policy:
@@ -403,7 +403,36 @@ class TD3(OffPolicyRLModel):
                     self.sess.run(tf.global_variables_initializer())
                     self.sess.run(target_init_op)
 
+                #a, t = self.test_nets(["policy", "qf1", "qf2"])
+
                 self.summary = tf.summary.merge_all()
+
+    def test_nets(self, nets, obs=None, action=None, action_prev=None, state=None):
+        if isinstance(nets, str):
+            nets = [nets]
+
+        if obs is None:
+            obs = np.array([self.observation_space.sample() for i in range(self.batch_size)])
+        if action is None:
+            action = np.array([self.action_space.sample() for i in range(self.batch_size)])
+        if action_prev is None:
+            action_prev = np.array([self.action_space.sample() for i in range(self.batch_size)])
+        if state is None:
+            state = self.policy_tf.initial_state
+
+        act = self.sess.run([getattr(self.policy_tf_act, n) for n in nets] + [self.policy_tf_act.pi_state], feed_dict={
+            self.policy_tf_act.obs_ph: obs[0, :][None],
+            self.policy_tf_act.action_ph: action[0, :][None],
+            self.policy_tf_act.action_prev_ph: action_prev[0, :][None],
+            self.policy_tf_act: None
+        })
+        train = self.sess.run([getattr(self.policy_tf, n) for n in nets] + [self.policy_tf.pi_state], feed_dict={
+            self.policy_tf.obs_ph: obs,
+            self.policy_tf.action_ph: action,
+            self.policy_tf.action_prev_ph: action_prev
+        })
+
+        return act, train
 
     def _train_step(self, step, writer, learning_rate, update_policy):
         # Sample a batch from the replay buffer
@@ -563,8 +592,15 @@ class TD3(OffPolicyRLModel):
                     rescaled_action = action = self.env.action_space.sample()
                 else:
                     if self.recurrent_policy:
+
+                        #test, test_p = self.policy_tf.step(np.repeat(obs[None], self.batch_size, axis=0), action_prev=np.repeat(self.policy_tf_act.action_prev, self.batch_size, axis=0),
+                        #                           state=np.repeat(policy_state, self.batch_size, axis=0), mask=np.repeat(done, self.batch_size, axis=0)
+                        #                           )
                         action, policy_state = self.policy_tf_act.step(obs[None], state=policy_state, mask=np.array(done)[None])
                         action = action.flatten()
+
+                        #if not np.allclose(action, test[0, :]) or not np.allclose(policy_state, test_p[0, :][None], atol=1e-5):
+                        #    print("WHUT")
                     else:
                         action = self.policy_tf.step(obs[None]).flatten()
                     # Add noise to the action, as the policy
