@@ -189,7 +189,7 @@ class TD3(OffPolicyRLModel):
 
                         self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
                                                      n_batch=None,
-                                                     n_steps=sequence_length, print_tensors=True,
+                                                     n_steps=sequence_length, print_tensors=False,
                                                      add_state_phs=state_phs,
                                                      **policy_tf_kwargs, **self.policy_kwargs)
                         #self.policy_tf_act = self.policy(self.sess, self.observation_space, self.action_space,
@@ -243,7 +243,7 @@ class TD3(OffPolicyRLModel):
                         replay_buffer_kw = {"size": self.buffer_size}
                         if self.buffer_kwargs is not None:
                             replay_buffer_kw.update(self.buffer_kwargs)
-                        if self.recurrent_policy:
+                        if self.recurrent_policy:  # TODO: fix timeaware for recurrent
                             replay_buffer_kw["extra_data_names"] = self.policy_tf.extra_data_names
                             replay_buffer_kw["rnn_inputs"] = self.policy_tf.rnn_inputs
                         self.replay_buffer = self.buffer_type(**replay_buffer_kw)
@@ -459,6 +459,7 @@ class TD3(OffPolicyRLModel):
 
         if self.recurrent_policy and self.scan_length > 0:
             default_data = {self.observations_ph: batch_extra.pop("scan_obs")}  # TODO: ensure that target network gets state calculated for that batch sample by main network, or fix separate target state saving and calculation
+            scan_mask = np.ones((self.batch_size // self.sequence_length, self.sequence_length))
             if "scan_action" in batch_extra:
                 default_data[self.actions_ph] = batch_extra.pop("scan_action")
             if self.target_policy_tf.save_target_state:
@@ -468,7 +469,7 @@ class TD3(OffPolicyRLModel):
                 seq_data_idxs = np.zeros(shape=(self.scan_length,), dtype=np.bool)
                 seq_data_idxs[seq_i * self.sequence_length:(seq_i + 1) * self.sequence_length] = True
                 seq_data_idxs = np.tile(seq_data_idxs, self.batch_size // self.sequence_length)
-                feed_dict_scan = {k: v[seq_data_idxs] for k, v  in default_data.items()}
+                feed_dict_scan = {k: v[seq_data_idxs] for k, v in default_data.items()}
                 feed_dict_scan.update({self.train_extra_phs[k.replace("scan_", "")]: v[seq_data_idxs]
                                        for k, v in batch_extra.items() if "scan_" in k})
                 if self.policy_tf.share_rnn:
@@ -485,12 +486,18 @@ class TD3(OffPolicyRLModel):
                                              self.target_policy_tf.qf2_state])
                         state_names.extend(["target_" + state_name for state_name in state_names])
                 feed_dict_scan.update({self.train_extra_phs[name]: batch_extra[name] for name in state_names})
+                feed_dict_scan[self.policy_tf.mask_ph] = scan_mask
+                if self.target_policy_tf.save_target_state:
+                    feed_dict_scan[self.target_policy_tf.mask_ph] = scan_mask
                 states = self.sess.run(state_objects, feed_dict_scan)
                 updated_states = {k: states[i] for i, k in enumerate(state_names)}
                 batch_extra.update(updated_states)
                 if self.policy_tf.save_state:
                     self.replay_buffer.update_state([(idx[0], idx[1] - self.scan_length + self.sequence_length * seq_i + 1)
                                                      for idx in batch_extra["state_idxs_scan"]], updated_states)
+
+            feed_dict[self.policy_tf.mask_ph] = np.ones((self.batch_size // self.sequence_length, self.sequence_length))
+            feed_dict[self.target_policy_tf.mask_ph] = np.ones((self.batch_size // self.sequence_length, self.sequence_length))
 
         if self.target_state_from_main:  # If target states are not saved to replay buffer and/or computed with scan then set target network hidden state to output from the main network
             feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items() if not all(n in k for n in ["target", "state"])})
