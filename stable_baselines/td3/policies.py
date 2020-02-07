@@ -552,8 +552,8 @@ class LstmMlpPolicy(RecurrentPolicy):
     def make_critics(self, obs=None, action=None, action_prev=None, dones=None, reuse=False, scope="values_fn"):
         obs, action, action_prev, dones = self._process_phs(obs=obs, action=action, action_prev=action_prev, dones=dones)
 
-        ff_phs = [action]
-        rnn_phs = [obs, action_prev]
+        ff_phs = None
+        rnn_phs = [obs, action_prev, action]
         return super().make_critics(ff_phs=ff_phs, rnn_phs=rnn_phs, dones=dones, reuse=reuse, scope=scope)
 
 
