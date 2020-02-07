@@ -135,7 +135,9 @@ class TD3(OffPolicyRLModel):
             self.dones_ph = None
             self.sequence_length = None
             self.scan_length = None
-            self.target_state_from_main = target_state_from_main
+
+        self.target_state_from_main = target_state_from_main
+        assert not (self.target_state_from_main and not self.recurrent_policy)
 
         self.train_extra_phs = {}
 
