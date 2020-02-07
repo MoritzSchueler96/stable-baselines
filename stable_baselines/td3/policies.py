@@ -255,9 +255,9 @@ class RecurrentPolicy(TD3Policy):
         self.save_state = save_state
         self.save_target_state = save_target_state
 
-        self.extra_phs = ["action_prev"]
+        self.extra_phs = ["action_prev", "target_action_prev"]
         self.rnn_inputs = ["obs", "action_prev"]
-        self.extra_data_names = ["action_prev"]
+        self.extra_data_names = ["action_prev", "target_action_prev"]
 
         if self.save_target_state:
             self.extra_data_names = sorted(self.extra_data_names + ["target_action_prev"])
@@ -438,8 +438,7 @@ class RecurrentPolicy(TD3Policy):
         else:
             data["action_prev"] = _locals["episode_data"][-1]["action"]
 
-        if self.save_target_state:
-            data["target_action_prev_rnn"] = _locals["action"]
+        data["target_action_prev"] = _locals["action"]
 
         return data
 
