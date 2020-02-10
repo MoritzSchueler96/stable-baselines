@@ -190,15 +190,15 @@ class TD3(OffPolicyRLModel):
                             state_phs = "target" if state_phs is None else "both"
 
                         self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
-                                                     n_batch=None,
+                                                     n_batch=self.batch_size,
                                                      n_steps=sequence_length, print_tensors=False,
                                                      add_state_phs=state_phs,
                                                      **policy_tf_kwargs, **self.policy_kwargs)
-                        #self.policy_tf_act = self.policy(self.sess, self.observation_space, self.action_space,
-                        #                                 n_batch=1, **policy_tf_kwargs, print_tensors=True,
-                        #                                 **self.policy_kwargs)
+                        self.policy_tf_act = self.policy(self.sess, self.observation_space, self.action_space,
+                                                         n_batch=1, **policy_tf_kwargs, print_tensors=False,
+                                                         **self.policy_kwargs)
                         self.target_policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
-                                                            n_batch=None,
+                                                            n_batch=self.batch_size,
                                                             n_steps=sequence_length, **policy_tf_kwargs,
                                                             **self.policy_kwargs)
 
@@ -265,9 +265,9 @@ class TD3(OffPolicyRLModel):
 
                         if self.policy_tf.keras_reuse:  # TODO: fix hacky keras reuse bandaid
                             self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph, **actor_kws)
-                            #self.policy_tf_act._rnn_layer = self.policy_tf._rnn_layer
-                            #self.policy_act = policy_act = self.policy_tf_act.make_actor(reuse=True)
-                            self.policy_tf_act = self.policy_tf
+                            self.policy_tf_act._rnn_layer = self.policy_tf._rnn_layer
+                            self.policy_act = policy_act = self.policy_tf_act.make_actor(reuse=True)
+                            #self.policy_tf_act = self.policy_tf
                         else:
                             self.policy_out = policy_out = self.policy_tf.make_actor(self.processed_obs_ph, **actor_kws)
                             self.policy_act = policy_act = self.policy_tf_act.make_actor(reuse=True)
@@ -461,7 +461,6 @@ class TD3(OffPolicyRLModel):
 
         if self.recurrent_policy and self.scan_length > 0:
             default_data = {self.observations_ph: batch_extra.pop("scan_obs")}  # TODO: ensure that target network gets state calculated for that batch sample by main network, or fix separate target state saving and calculation
-            scan_mask = np.ones((self.batch_size // self.sequence_length, self.sequence_length))
             if "scan_action" in batch_extra:
                 default_data[self.actions_ph] = batch_extra.pop("scan_action")
             if self.target_policy_tf.save_target_state:
@@ -488,18 +487,12 @@ class TD3(OffPolicyRLModel):
                                              self.target_policy_tf.qf2_state])
                         state_names.extend(["target_" + state_name for state_name in state_names])
                 feed_dict_scan.update({self.train_extra_phs[name]: batch_extra[name] for name in state_names})
-                feed_dict_scan[self.policy_tf.mask_ph] = scan_mask
-                if self.target_policy_tf.save_target_state:
-                    feed_dict_scan[self.target_policy_tf.mask_ph] = scan_mask
                 states = self.sess.run(state_objects, feed_dict_scan)
                 updated_states = {k: states[i] for i, k in enumerate(state_names)}
                 batch_extra.update(updated_states)
                 if self.policy_tf.save_state:
                     self.replay_buffer.update_state([(idx[0], idx[1] - self.scan_length + self.sequence_length * seq_i + 1)
                                                      for idx in batch_extra["state_idxs_scan"]], updated_states)
-
-            feed_dict[self.policy_tf.mask_ph] = np.ones((self.batch_size // self.sequence_length, self.sequence_length))
-            feed_dict[self.target_policy_tf.mask_ph] = np.ones((self.batch_size // self.sequence_length, self.sequence_length))
 
         if self.target_state_from_main:  # If target states are not saved to replay buffer and/or computed with scan then set target network hidden state to output from the main network
             feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items() if not all(n in k for n in ["target", "state"])})

@@ -236,13 +236,12 @@ class RecurrentPolicy(TD3Policy):
         self.share_rnn = share_rnn
         self._obs_ph = self.processed_obs
         self.obs_tp1_ph = self.processed_obs
-        self.mask_ph = tf.placeholder(tf.float32, (self.n_batch, self.n_steps), name="rnn_mask_ph")
 
-        #assert self.n_batch % self.n_steps == 0, "The batch size must be a multiple of sequence length (n_steps)"
-        #self._rnn_n_batch = self.n_batch // self.n_steps
+        assert self.n_batch % self.n_steps == 0, "The batch size must be a multiple of sequence length (n_steps)"
+        self._rnn_n_batch = self.n_batch // self.n_steps
         _state_shape = self.n_rnn * 2 if self.rnn_type == "lstm" else self.n_rnn
 
-        self._initial_state = np.zeros((1, _state_shape), dtype=np.float32)
+        self._initial_state = np.zeros((self._rnn_n_batch, _state_shape), dtype=np.float32)
 
         self.action_prev = np.zeros((1, *self.ac_space.shape))
 
@@ -254,13 +253,13 @@ class RecurrentPolicy(TD3Policy):
             self.qf2_state = None
 
         with tf.variable_scope("input", reuse=False):
-            self.dones_ph = tf.placeholder(tf.float32, (self.n_batch,), name="dones_ph")  # (done t-1)
+            self.dones_ph = tf.placeholder_with_default(np.zeros((self.n_batch,), dtype=np.float32), (self.n_batch,), name="dones_ph")  # (done t-1)
             if self.share_rnn:
                 self.state_ph = tf.placeholder(tf.float32, (self.n_batch, _state_shape), name="state_ph")
             else:
-                self.pi_state_ph = tf.placeholder(tf.float32, (self.n_batch, _state_shape), name="pi_state_ph")
-                self.qf1_state_ph = tf.placeholder(tf.float32, (self.n_batch, _state_shape), name="qf1_state_ph")
-                self.qf2_state_ph = tf.placeholder(tf.float32, (self.n_batch, _state_shape), name="qf2_state_ph")
+                self.pi_state_ph = tf.placeholder_with_default(self._initial_state, (self._rnn_n_batch, _state_shape), name="pi_state_ph")
+                self.qf1_state_ph = tf.placeholder_with_default(self._initial_state, (self._rnn_n_batch, _state_shape), name="qf1_state_ph")
+                self.qf2_state_ph = tf.placeholder_with_default(self._initial_state, (self._rnn_n_batch, _state_shape), name="qf2_state_ph")
 
             self.action_prev_ph = tf.placeholder(np.float32, (self.n_batch, *self.ac_space.shape), name="action_prev_ph")
 
@@ -268,7 +267,7 @@ class RecurrentPolicy(TD3Policy):
         self.save_target_state = save_target_state
 
         self.extra_phs = ["action_prev", "target_action_prev"]
-        self.rnn_inputs = ["obs", "action_prev"]  # TODO: rename to scan data?
+        self.rnn_inputs = ["action", "action_prev", "obs"]  # TODO: rename to scan data?
         self.extra_data_names = ["action_prev", "target_action_prev"]
 
         if self.save_target_state:
@@ -335,10 +334,10 @@ class RecurrentPolicy(TD3Policy):
                 #state_ph = tf.where(tf.cast(dones, dtype=np.bool),
                 #                    tf.keras.backend.repeat_elements(self.initial_state, state_ph.shape[0].value, axis=0),
                 #                    state_ph)  # TODO: implement done functionality
-                input_tensor, state = larnn_layer(input_tensor, initial_state=state_ph, mask=dones)
+                input_tensor, state = larnn_layer(input_tensor, initial_state=state_ph)#, mask=dones)
                 if self.print_tensors:
                     state = tf.Print(state, [state], "State out: ")
-                input_tensor = tf.boolean_mask(input_tensor, dones, axis=0, name="valid_seq_mask")
+                #input_tensor = tf.boolean_mask(input_tensor, dones, axis=0, name="valid_seq_mask")
                 input_tensor = tf.reshape(input_tensor, (-1, self.n_rnn))
             else:
                 raise ValueError
@@ -360,14 +359,14 @@ class RecurrentPolicy(TD3Policy):
 
         if self.share_rnn:
             with tf.variable_scope("shared", reuse=tf.AUTO_REUSE):
-                rnn_branch, self.state = self._make_branch("rnn", rnn_branch, self.mask_ph, self.state_ph)
+                rnn_branch, self.state = self._make_branch("rnn", rnn_branch, dones, self.state_ph)
 
         with tf.variable_scope(scope, reuse=reuse):
             if self.layers["ff"] is not None:
                ff_branch = self._make_branch("ff", ff_branch)
 
             if not self.share_rnn:
-                rnn_branch, self.pi_state = self._make_branch("rnn", rnn_branch, self.mask_ph, self.pi_state_ph)
+                rnn_branch, self.pi_state = self._make_branch("rnn", rnn_branch, dones, self.pi_state_ph)
 
             if ff_phs is not None:
                 head = tf.concat([ff_branch, rnn_branch], axis=-1)
@@ -394,7 +393,7 @@ class RecurrentPolicy(TD3Policy):
 
         if self.share_rnn:
             with tf.variable_scope("shared", reuse=tf.AUTO_REUSE):
-                rnn_branch_s, self.state = self._make_branch("rnn", rnn_branch_in, self.mask_ph, self.state_ph)
+                rnn_branch_s, self.state = self._make_branch("rnn", rnn_branch_in, dones, self.state_ph)
 
         with tf.variable_scope(scope, reuse=reuse):
             # Double Q values to reduce overestimation
@@ -407,7 +406,7 @@ class RecurrentPolicy(TD3Policy):
                         ff_branch = ff_branch_in
 
                     if not self.share_rnn:
-                        rnn_branch, state = self._make_branch("rnn", rnn_branch, self.mask_ph,
+                        rnn_branch, state = self._make_branch("rnn", rnn_branch, dones,
                                                                getattr(self, "qf{}_state_ph".format(qf_i)))
                         setattr(self, "qf{}_state".format(qf_i), state)
                     else:
@@ -439,13 +438,11 @@ class RecurrentPolicy(TD3Policy):
 
         obs = np.repeat(obs, self.n_steps, axis=0)
         action_prev = np.repeat(action_prev, self.n_steps, axis=0)
-        mask = np.zeros((1, self.n_steps), np.float32)
-        mask[0, 0] = 1
 
         rnn_node = self.state if self.share_rnn else self.pi_state
         state_ph = self.state_ph if self.share_rnn else self.pi_state_ph
 
-        feed_dict.update({self.obs_ph: obs, state_ph: state, self.mask_ph: mask,
+        feed_dict.update({self.obs_ph: obs, state_ph: state, self.dones_ph: mask,
                             self.action_prev_ph: action_prev})
 
         action, out_state = self.sess.run([self.policy, rnn_node], feed_dict)
@@ -472,7 +469,6 @@ class RecurrentPolicy(TD3Policy):
                     qf_feed_dict = {
                         self.qf1_state_ph: _locals["episode_data"][-1]["qf1_state"][None],
                         self.qf2_state_ph: _locals["episode_data"][-1]["qf2_state"][None],
-                        self.mask_ph: mask
                     }
                     qf_feed_dict.update({getattr(self, data_name + "_ph"): np.repeat(_locals["episode_data"][-1][data_name][None], self.n_steps, axis=0)
                                          for data_name in self.rnn_inputs if "target" not in data_name})
