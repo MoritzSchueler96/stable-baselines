@@ -217,7 +217,7 @@ class HERGoalEnvWrapper(object):
         if suffix is not None:
             file_names = [f + suffix for f in file_names]
         for rms, name in zip([self.obs_rms, self.ret_rms], file_names):
-            with open("{}_{}.pkl".format(path, name), 'wb') as file_handler:
+            with open("{}/{}.pkl".format(path, name), 'wb') as file_handler:
                 pickle.dump(rms, file_handler)
 
     def load_running_average(self, path, suffix=None):
@@ -231,7 +231,7 @@ class HERGoalEnvWrapper(object):
             open_name = name
             if suffix is not None:
                 open_name += suffix
-            with open("{}_{}.pkl".format(path, open_name), 'rb') as file_handler:
+            with open("{}/{}.pkl".format(path, open_name), 'rb') as file_handler:
                 setattr(self, name, pickle.load(file_handler))
 
 
