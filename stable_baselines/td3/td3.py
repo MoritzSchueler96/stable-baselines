@@ -713,6 +713,7 @@ class TD3(OffPolicyRLModel):
                     episode_rewards.append(0.0)
                     if self.recurrent_policy:
                         prev_policy_state = self.policy_tf_act.initial_state
+                        policy_state = self.policy_tf_act.initial_state
 
                     maybe_is_success = info.get('is_success')
                     if maybe_is_success is not None:
