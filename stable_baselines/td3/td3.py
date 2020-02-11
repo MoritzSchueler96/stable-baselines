@@ -321,6 +321,8 @@ class TD3(OffPolicyRLModel):
                     for var in tf.trainable_variables():
                         tf.summary.histogram(var.name, var)
 
+                tf.summary.histogram("PI state", self.policy_tf.pi_state)
+
                 # TODO: introduce somwehere here the placeholder for history which updates internal state?
                 with tf.variable_scope("loss", reuse=False):
                     # Take the min of the two target Q-Values (clipped Double-Q Learning)
