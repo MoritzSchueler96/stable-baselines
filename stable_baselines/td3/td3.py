@@ -317,6 +317,10 @@ class TD3(OffPolicyRLModel):
 
                 policy_pre_activation = self.policy_tf.policy_pre_activation
 
+                if self.tb_log_weights:
+                    for var in tf.trainable_variables():
+                        tf.summary.histogram(var.name, var)
+
                 # TODO: introduce somwehere here the placeholder for history which updates internal state?
                 with tf.variable_scope("loss", reuse=False):
                     # Take the min of the two target Q-Values (clipped Double-Q Learning)
@@ -402,10 +406,6 @@ class TD3(OffPolicyRLModel):
                     tf.summary.scalar('qf1_loss', qf1_loss)
                     tf.summary.scalar('qf2_loss', qf2_loss)
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
-
-                    if self.tb_log_weights:
-                        for var in tf.trainable_variables():
-                            tf.summary.histogram(var.name, var)
 
                 # Retrieve parameters that must be saved
                 self.params = get_vars("model")
