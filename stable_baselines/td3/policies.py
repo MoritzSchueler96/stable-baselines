@@ -209,7 +209,7 @@ class RecurrentPolicy(TD3Policy):
     
     def __init__(self, sess, ob_space, ac_space, layers, n_env=1, n_steps=1, n_batch=None, add_state_phs=None, reuse=False,
                  cnn_extractor=nature_cnn, feature_extraction="mlp", n_rnn=128, share_rnn=False, save_state=False,
-                 save_target_state=False, rnn_type="lstm", layer_norm=False, act_fun=tf.nn.relu, print_tensors=False,
+                 save_target_state=False, rnn_type="lstm", rnn_kwargs=None, layer_norm=False, act_fun=tf.nn.relu, print_tensors=False,
                  obs_module_indices=None, **kwargs):
 
         super(RecurrentPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch,
@@ -226,6 +226,7 @@ class RecurrentPolicy(TD3Policy):
         self.layers = layers
         self.obs_module_indices = obs_module_indices
         self.rnn_type = rnn_type
+        self.rnn_kwargs = rnn_kwargs if rnn_kwargs is not None else {}
         self.keras_reuse = False
         self._rnn_layer = {"pi": None, "qf1": None, "qf2": None}
 
@@ -321,7 +322,7 @@ class RecurrentPolicy(TD3Policy):
                 n_features = input_tensor.shape[-1].value
                 var_scope_name = tf.get_variable_scope().original_name_scope.split("/")[-2].split("_")[0]
                 if self._rnn_layer[var_scope_name] is None:
-                    larnn_cell = LinearAntisymmetricCell(self.n_rnn, step_size=self._rnn_epsilon, method=self._rnn_method)
+                    larnn_cell = LinearAntisymmetricCell(self.n_rnn, **self.rnn_kwargs)
                     larnn_layer = tf.keras.layers.RNN(larnn_cell, return_state=True, return_sequences=True,
                                                       input_shape=(None, self.n_steps, n_features))
                     self._rnn_layer[var_scope_name] = larnn_layer
@@ -635,22 +636,22 @@ class LstmFFMlpPolicy(RecurrentPolicy):
 class LarnnMlpPolicy(RecurrentPolicy):
     recurrent = True
 
-    def __init__(self, sess, ob_space, ac_space, rnn_epsilon, n_env=1, n_steps=1, n_batch=None, reuse=False,
+    def __init__(self, sess, ob_space, ac_space, rnn_kwargs, n_env=1, n_steps=1, n_batch=None, reuse=False,
                  layers=None, cnn_extractor=nature_cnn, feature_extraction="mlp", n_rnn=128, share_rnn=False,
-                 layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, rnn_method="midpoint", **kwargs):
+                 layer_norm=False, act_fun=tf.nn.relu, obs_module_indices=None, **kwargs):
         if layers is None:
             layers = {"ff": None, "rnn": [64, 64], "head": []}
         else:
             assert layers["ff"] is None
+        assert "step_size" in rnn_kwargs
+
         super().__init__(sess, ob_space, ac_space, layers, n_env, n_steps, n_batch,
-                         reuse=reuse, cnn_extractor=cnn_extractor,
+                         reuse=reuse, cnn_extractor=cnn_extractor, rnn_kwargs=rnn_kwargs,
                          feature_extraction=feature_extraction, n_rnn=n_rnn, rnn_type="larnn",
                          share_rnn=share_rnn, layer_norm=layer_norm, act_fun=act_fun,
                          obs_module_indices=obs_module_indices, **kwargs)
 
         self.keras_reuse = True
-        self._rnn_epsilon = rnn_epsilon
-        self._rnn_method = rnn_method
 
     def make_actor(self, obs=None, action_prev=None, dones=None, reuse=False, scope="pi"):
         obs, action_prev, dones = self._process_phs(obs=obs, action_prev=action_prev, dones=dones)
