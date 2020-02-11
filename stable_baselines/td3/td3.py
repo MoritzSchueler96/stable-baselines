@@ -62,7 +62,7 @@ class TD3(OffPolicyRLModel):
                  learning_starts=100, train_freq=100, gradient_steps=100, batch_size=128,
                  tau=0.005, policy_delay=2, action_noise=None, action_l2_scale=0,
                  target_policy_noise=0.2, target_noise_clip=0.5,
-                 random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
+                 random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None, tb_log_weights=False,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, time_aware=False,
                  reward_transformation=None, target_state_from_main=False, clip_q_target=None):
         super(TD3, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
@@ -88,6 +88,8 @@ class TD3(OffPolicyRLModel):
         self.policy_delay = policy_delay
         self.target_noise_clip = target_noise_clip
         self.target_policy_noise = target_policy_noise
+
+        self.tb_log_weights = tb_log_weights
 
         self.time_aware = time_aware
 
@@ -400,6 +402,10 @@ class TD3(OffPolicyRLModel):
                     tf.summary.scalar('qf1_loss', qf1_loss)
                     tf.summary.scalar('qf2_loss', qf2_loss)
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.learning_rate_ph))
+
+                    if self.tb_log_weights:
+                        for var in tf.trainable_variables():
+                            tf.summary.histogram(var.name, var)
 
                 # Retrieve parameters that must be saved
                 self.params = get_vars("model")
