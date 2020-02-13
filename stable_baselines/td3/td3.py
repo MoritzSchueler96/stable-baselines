@@ -61,7 +61,7 @@ class TD3(OffPolicyRLModel):
                  buffer_type=ReplayBuffer, buffer_kwargs=None, prioritization_starts=0, beta_schedule=None,
                  learning_starts=100, train_freq=100, gradient_steps=100, batch_size=128,
                  tau=0.005, policy_delay=2, action_noise=None, action_l2_scale=0,
-                 target_policy_noise=0.2, target_noise_clip=0.5,
+                 target_policy_noise=0.2, target_noise_clip=0.5, optimizer="adam",
                  random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, time_aware=False,
                  reward_transformation=None, clip_q_target=None):
@@ -127,6 +127,8 @@ class TD3(OffPolicyRLModel):
 
         self.clip_q_target = clip_q_target
         assert clip_q_target is None or len(clip_q_target) == 2
+
+        self.optimizer = optimizer
 
         self.recurrent_policy = getattr(self.policy, "recurrent", False)
         if self.recurrent_policy:
@@ -334,13 +336,20 @@ class TD3(OffPolicyRLModel):
                     # Policy train op
                     # will be called only every n training steps,
                     # where n is the policy delay
-                    policy_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
+                    if self.optimizer == "adam":
+                        optim = tf.train.AdamOptimizer
+                    elif self.optimizer == "rmsprop":
+                        optim = tf.train.RMSPropOptimizer
+                    else:
+                        raise ValueError("Invalid choice of optimizer")
+
+                    policy_optimizer = optim(learning_rate=self.learning_rate_ph)
                     policy_vars = get_vars("model/pi") + get_vars("model/shared")
                     policy_train_op = policy_optimizer.minimize(policy_loss, var_list=policy_vars)
                     self.policy_train_op = policy_train_op
 
                     # Q Values optimizer
-                    qvalues_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate_ph)
+                    qvalues_optimizer = optim(learning_rate=self.learning_rate_ph)
                     qvalues_params = get_vars('model/values_fn/') + get_vars("model/shared/")
 
                     # Q Values and policy target params
