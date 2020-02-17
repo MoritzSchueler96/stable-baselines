@@ -154,6 +154,8 @@ class FeedForwardPolicy(TD3Policy):
             else:
                 critics_h = tf.layers.flatten(obs)
 
+            self.extracted = critics_h
+
             # Concatenate preprocessed state and action
             qf_h = tf.concat([critics_h, action], axis=-1)
 
@@ -170,7 +172,7 @@ class FeedForwardPolicy(TD3Policy):
             self.qf2 = qf2
             # TODO: assumes that all qf1 and qf2 can never have opposite signs
             #self.q_discrepancy = tf.square(self.qf1 - self.qf2) / tf.square(tf.maximum(self.qf1, self.qf2))
-            self.q_discrepancy = tf.abs(self.qf1 - self.qf2)
+            #self.q_discrepancy = tf.abs(self.qf1 - self.qf2)
 
         return self.qf1, self.qf2
 
@@ -815,6 +817,48 @@ class CnnMlpPolicy(FeedForwardPolicy):
                                            cnn_extractor=cnn_1d_extractor, feature_extraction="cnn", **_kwargs)
 
 
+class DRCnnMlpPolicy(FeedForwardPolicy):
+    """
+    Policy object that implements actor critic, using a CNN (the nature CNN)
+
+    :param sess: (TensorFlow session) The current TensorFlow session
+    :param ob_space: (Gym Space) The observation space of the environment
+    :param ac_space: (Gym Space) The action space of the environment
+    :param n_env: (int) The number of environments to run
+    :param n_steps: (int) The number of steps to run for each environment
+    :param n_batch: (int) The number of batch to run (n_envs * n_steps)
+    :param reuse: (bool) If the policy is reusable or not
+    :param _kwargs: (dict) Extra keyword arguments for the nature CNN feature extraction
+    """
+
+    def __init__(self, sess, ob_space, ac_space, my_size, n_env=1, n_steps=1, n_batch=None, reuse=False, **_kwargs):
+        super(DRCnnMlpPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse,
+                                           cnn_extractor=cnn_1d_extractor, feature_extraction="cnn", **_kwargs)
+
+        with tf.variable_scope("input", reuse=False):
+            self.my_ph = tf.placeholder(tf.float32, (self.n_batch, *my_size), name="my_ph")  # (done t-1)
+        self.extra_phs = ["my", "target_my"]
+        self.extra_data_names = ["my", "target_my"]
+
+    def make_critics(self, obs=None, action=None, my=None, reuse=False, scope="values_fn"):
+        if my is None:
+            my = self.my_ph
+
+        qf1, qf2 = super().make_critics(obs, action, reuse, scope)
+
+        self.extracted = tf.concat([self.extracted, my], axis=-1)
+
+        return qf1, qf2
+
+    def collect_data(self, _locals, _globals):
+        data = {}
+        if "my" not in _locals or _locals["ep_data"]:
+            data["my"] = _locals["self"].env.get_env_parameters()
+            data["target_my"] = data["my"]
+
+        return data
+
+
 class LnCnnPolicy(FeedForwardPolicy):
     """
     Policy object that implements actor critic, using a CNN (the nature CNN), with layer normalisation
@@ -880,3 +924,4 @@ register_policy("LnCnnPolicy", LnCnnPolicy)
 register_policy("MlpPolicy", MlpPolicy)
 register_policy("LnMlpPolicy", LnMlpPolicy)
 register_policy("CnnMlpPolicy", CnnMlpPolicy)
+register_policy("DRCnnMlpPolicy", CnnMlpPolicy)
