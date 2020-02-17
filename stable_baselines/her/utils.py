@@ -72,8 +72,8 @@ class HERGoalEnvWrapper(object):
         self.orig_obs = None
         self.epsilon = 1e-5
         if norm:
-            obs_norm_shape = list(self.observation_space.shape)
-            obs_norm_shape[-1] -= self.goal_dim  # TODO: if multidim only one time entry should be used and then applied to the others (or at least support for this should be added)
+            obs_norm_shape = [self.observation_space.shape[-1]]
+            obs_norm_shape[-1] -= self.goal_dim
             self.obs_rms = RunningMeanStd(shape=obs_norm_shape)
             self.ret_rms = RunningMeanStd(shape=())
             self.clip_obs = clip_obs
@@ -134,12 +134,15 @@ class HERGoalEnvWrapper(object):
                 is_dict = True
                 obs = self.convert_dict_to_obs(obs)
             if self.training and update:
-                self.ep_obs_data.append(obs[..., :-self.goal_dim])
+                if len(obs.shape) == 2:
+                    self.ep_obs_data.append(obs[0, :-self.goal_dim])
+                else:
+                    self.ep_obs_data.append(obs[:-self.goal_dim])
             obs[..., :-self.goal_dim] = np.clip((obs[..., :-self.goal_dim] - self.obs_rms.mean) /
                                            np.sqrt(self.obs_rms.var + self.epsilon),
                                            -self.clip_obs, self.clip_obs)
-            obs[-self.goal_dim:] = np.clip((obs[-self.goal_dim:] - self.obs_rms.mean[-self.goal_dim:]) /
-                                           np.sqrt(self.obs_rms.var[-self.goal_dim:] + self.epsilon),
+            obs[..., -self.goal_dim:] = np.clip((obs[..., -self.goal_dim:] - self.obs_rms.mean[..., -self.goal_dim:]) /
+                                           np.sqrt(self.obs_rms.var[..., -self.goal_dim:] + self.epsilon),
                                            -self.clip_obs, self.clip_obs)
 
             if is_dict:
