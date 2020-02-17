@@ -189,18 +189,20 @@ class TD3(OffPolicyRLModel):
                                                             n_steps=sequence_length, **policy_tf_kwargs,
                                                             **self.policy_kwargs)
 
-                        for ph_name in self.policy_tf.extra_phs:
-                            if "target_" in ph_name:
-                                self.train_extra_phs[ph_name] = getattr(self.target_policy_tf, ph_name.replace("target_", "") + "_ph")
-                            else:
-                                self.train_extra_phs[ph_name] = getattr(self.policy_tf, ph_name + "_ph")
-
                         self.dones_ph = self.policy_tf.dones_ph
                     else:
                         self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
                                                      **self.policy_kwargs)
                         self.target_policy_tf = self.policy(self.sess, self.observation_space, self.action_space,
                                                             **self.policy_kwargs)
+
+                    if hasattr(self.policy_tf, "extra_phs"):
+                        for ph_name in self.policy_tf.extra_phs:
+                            if "target_" in ph_name:
+                                self.train_extra_phs[ph_name] = getattr(self.target_policy_tf,
+                                                                        ph_name.replace("target_", "") + "_ph")
+                            else:
+                                self.train_extra_phs[ph_name] = getattr(self.policy_tf, ph_name + "_ph")
 
                     # Initialize Placeholders
                     self.observations_ph = self.policy_tf.obs_ph
@@ -233,8 +235,9 @@ class TD3(OffPolicyRLModel):
                         if self.buffer_kwargs is not None:
                             replay_buffer_kw.update(self.buffer_kwargs)
                         if self.recurrent_policy:
-                            replay_buffer_kw["extra_data_names"] = self.policy_tf.extra_data_names
                             replay_buffer_kw["rnn_inputs"] = self.policy_tf.rnn_inputs
+                        if hasattr(self.policy_tf, "extra_data_names"):
+                            replay_buffer_kw["extra_data_names"] = self.policy_tf.extra_data_names
                         self.replay_buffer = self.buffer_type(**replay_buffer_kw)
 
                 if self.recurrent_policy:
@@ -599,11 +602,14 @@ class TD3(OffPolicyRLModel):
                     extra_data["bootstrap"] = bootstrap
 
                 if hasattr(self.policy, "collect_data"):
-                    extra_data.update(self.policy_tf_act.collect_data(locals(), globals()))
-                    if self.policy_tf.save_target_state:
-                        extra_data.update({"target_" + state_name: self.target_policy_tf.initial_state[0, :]
-                                           for state_name in (["state"] if self.target_policy_tf.share_lstm
-                                                              else ["pi_state", "qf1_state", "qf2_state"])})
+                    if self.recurrent_policy:
+                        extra_data.update(self.policy_tf_act.collect_data(locals(), globals()))
+                        if self.policy_tf.save_target_state:
+                            extra_data.update({"target_" + state_name: self.target_policy_tf.initial_state[0, :]
+                                               for state_name in (["state"] if self.target_policy_tf.share_lstm
+                                                                  else ["pi_state", "qf1_state", "qf2_state"])})
+                    else:
+                        extra_data.update(self.policy_tf.collect_data(locals(), globals()))
                 self.replay_buffer.add(obs, action, reward, new_obs, done, **extra_data) # Extra data must be sent as kwargs to support separate bootstrap and done signals (needed for HER style algorithms)
                 episode_data.append({"obs": obs, "action": action, "reward": reward, "obs_tp1": new_obs, "done": done, **extra_data})
                 obs = new_obs
