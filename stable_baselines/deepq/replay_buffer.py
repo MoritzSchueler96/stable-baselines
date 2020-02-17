@@ -8,7 +8,7 @@ from stable_baselines.common.segment_tree import SumSegmentTree, MinSegmentTree
 class ReplayBuffer(object):
     __name__ = "ReplayBuffer"
 
-    def __init__(self, size):
+    def __init__(self, size, extra_data_names=()):
         """
         Implements a ring buffer (FIFO).
 
@@ -18,6 +18,7 @@ class ReplayBuffer(object):
         self._storage = []
         self._maxsize = int(size)
         self._next_idx = 0
+        self._extra_data_names = sorted(extra_data_names)
 
     def __len__(self):
         return len(self._storage)
@@ -50,7 +51,7 @@ class ReplayBuffer(object):
         """
         return len(self) == self.buffer_size
 
-    def add(self, obs_t, action, reward, obs_tp1, done):
+    def add(self, obs_t, action, reward, obs_tp1, done, *extra_data, **extra_data_kwargs):
         """
         add a new transition to the buffer
 
@@ -60,7 +61,8 @@ class ReplayBuffer(object):
         :param obs_tp1: (Any) the current observation
         :param done: (bool) is the episode done
         """
-        data = (obs_t, action, reward, obs_tp1, done)
+        data = (obs_t, action, reward, obs_tp1, done, *extra_data,
+                *[extra_data_kwargs[k] for k in sorted(extra_data_kwargs)])
 
         if self._next_idx >= len(self._storage):
             self._storage.append(data)
@@ -70,15 +72,26 @@ class ReplayBuffer(object):
 
     def _encode_sample(self, idxes):
         obses_t, actions, rewards, obses_tp1, dones = [], [], [], [], []
+        extra_data = {name: [] for name in self._extra_data_names}
         for i in idxes:
             data = self._storage[i]
-            obs_t, action, reward, obs_tp1, done = data
+            obs_t, action, reward, obs_tp1, done, *extra_timestep_data = data
             obses_t.append(np.array(obs_t, copy=False))
             actions.append(np.array(action, copy=False))
             rewards.append(reward)
             obses_tp1.append(np.array(obs_tp1, copy=False))
             dones.append(done)
-        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones)
+
+            for data_i, extra_data_name in enumerate(self._extra_data_names):
+                data = extra_timestep_data[data_i]
+                if np.ndim(data) == 0:
+                    extra_data[extra_data_name].append(data)
+                else:
+                    extra_data[extra_data_name].append(np.array(data, copy=False))
+
+        extra_data = {k: np.array(v) for k, v in extra_data.items()}
+
+        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), extra_data
 
     def sample(self, batch_size, **_kwargs):
         """
