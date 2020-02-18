@@ -606,16 +606,37 @@ class ConcavePolicy(FeedForwardPolicy):
         return super().make_actor(obs, reuse, scope)
 
     def make_critics(self, obs=None, action=None, reuse=False, scope="values_fn"):
-        self.qf1, self.qf2 = super().make_critics(obs, action, reuse, scope)
+        if obs is None:
+            obs = self.processed_obs
+
+        if self.obs_module_indices is not None:
+            obs = tf.gather(obs, self.obs_module_indices["vf"], axis=-1)
+
         with tf.variable_scope(scope, reuse=reuse):
-            for qf_i in range(1, 3):
-                with tf.variable_scope("qf{}".format(qf_i), reuse=reuse):
-                    actions_centered = []
-                    for action_dim in range(action.shape[-1]):
-                        b = tf.Variable(tf.zeros([1], dtype=np.float32), name="qf{}_adim{}_bias".format(qf_i, action_dim))
-                        actions_centered.append(tf.subtract(action[:, action_dim], b))
-                    action_func = tf.reduce_sum(actions_centered, axis=-1)
-                    setattr(self, "qf{}".format(qf_i), -tf.square(action_func) + getattr(self, "qf{}".format(qf_i)))
+            if self.feature_extraction == "cnn" and self.cnn_vf:
+                critics_h = self.cnn_extractor(obs, name="vf_c1", act_fun=self.activ_fn, **self.cnn_kwargs)
+            else:
+                critics_h = tf.layers.flatten(obs)
+
+            # Concatenate preprocessed state and action
+            qf_h = tf.concat([critics_h, action], axis=-1)
+
+            # Double Q values to reduce overestimation
+            with tf.variable_scope('qf1', reuse=reuse):
+                qf1_h = mlp(qf_h, self.layers, self.activ_fn, layer_norm=self.layer_norm)
+                qf1 = tf.layers.dense(qf1_h, action.shape[-1], name="qf1")
+
+            with tf.variable_scope('qf2', reuse=reuse):
+                qf2_h = mlp(qf_h, self.layers, self.activ_fn, layer_norm=self.layer_norm)
+                qf2 = tf.layers.dense(qf2_h, action.shape[-1], name="qf2")
+
+            self.qf1 = qf1
+            self.qf2 = qf2
+            # TODO: assumes that all qf1 and qf2 can never have opposite signs
+            #self.q_discrepancy = tf.square(self.qf1 - self.qf2) / tf.square(tf.maximum(self.qf1, self.qf2))
+            self.q_discrepancy = tf.abs(self.qf1 - self.qf2)
+
+        return self.qf1, self.qf2
 
         return self.qf1, self.qf2
 
