@@ -432,7 +432,7 @@ class TD3(OffPolicyRLModel):
         feed_dict.update({v: batch_extra[k] for k, v in self.train_extra_phs.items()})
 
         if viz:
-            self.q_val_action_viz(batch_obs, batch_actions, vis_dim="2d")
+            self.q_val_action_viz(batch_obs, batch_actions, vis_dim="1d")
         step_ops = self.step_ops
         if update_policy:
             # Update policy and target networks
@@ -590,7 +590,7 @@ class TD3(OffPolicyRLModel):
                         step_writer = writer if grad_step % self.write_freq == 0 else None
                         mb_infos_vals.append(
                             self._train_step(step, step_writer, current_lr, (step + grad_step) % self.policy_delay == 0
-                        ,grad_step == 0))
+                        ,False))
 
                     # Log losses and entropy, useful for monitor training
                     if len(mb_infos_vals) > 0:
@@ -836,7 +836,10 @@ class TD3(OffPolicyRLModel):
 
         if q_func is None:
             q_func = self.qf1
-        action_ph = self.expert_actions_ph if q_func == self.qf1_expert else self.actions_ph
+        if getattr(self, "expert", None) is not None:
+            action_ph = self.expert_actions_ph if q_func == self.qf1_expert else self.actions_ph
+        else:
+            action_ph = self.actions_ph
         if vis_dim == "1d":
             x = np.linspace(-1, 1, 20)
             if len(obses.shape) == 1:
@@ -861,6 +864,8 @@ class TD3(OffPolicyRLModel):
             num_rows = int(actions.shape[1] // np.sqrt(actions.shape[1]))
             num_cols = math.ceil(actions.shape[1] / 2) if num_rows > 1 else actions.shape[1]
             fig, axs = plt.subplots(num_rows, num_cols)
+            if isinstance(axs, plt.Axes):
+                axs = np.array([axs])
             axs = axs.reshape(-1)
             for action_i in range(actions.shape[1]):
                 axs[action_i].plot(x, [np.mean(data[action_i][x_i]) for x_i in x])
@@ -893,5 +898,5 @@ class TD3(OffPolicyRLModel):
             #plt.scatter([0.], [0.], z[find_nearest2d(points, [0, 0])] + 1, marker="x")
             plt.plot([0, 0], [0, 0], [np.nanmin(z) - 1, np.nanmax(z) + 1], linewidth=3)
 
-        #plt.show()
-        plt.savefig("/home/eivind/Documents/dev/gym-workshop/gym_models/td3_reacher_expert_TRAININGSHAPETEST/q_viz_{}.png".format(self.num_timesteps), format="png", bbox_inches="tight")
+        plt.show()
+        #plt.savefig("/home/eivind/Documents/dev/gym-workshop/gym_models/td3_reacher_expert_TRAININGSHAPETEST/q_viz_{}.png".format(self.num_timesteps), format="png", bbox_inches="tight")
