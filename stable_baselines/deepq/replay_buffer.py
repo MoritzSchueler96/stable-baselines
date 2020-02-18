@@ -5,6 +5,7 @@ import numpy as np
 from stable_baselines.common.segment_tree import SumSegmentTree, MinSegmentTree
 
 from sklearn.cluster import KMeans
+from sklearn.exceptions import NotFittedError
 
 
 class ReplayBuffer(object):
@@ -99,72 +100,92 @@ class ReplayBuffer(object):
         return self._encode_sample(idxes)
 
 
-class ClusterStorage:
-    def __init__(self, n_clusters):
-        self._clusters = [[] for i in range(n_clusters)]
-        self.active_cluster = 0
-        self.n_clusters = n_clusters
-        self.cluster_sizes = [0 for i in range(n_clusters)]
-
-    def append(self, data):
-        self._clusters[self.active_cluster].append(data)
-        self.cluster_sizes[self.active_cluster] += 1
-
-    def __len__(self):
-        return len(self._clusters[self.active_cluster])
-
-    def __getitem__(self, item):
-        return self._clusters[self.active_cluster][item]
-
-    def __setitem__(self, key, value):
-        self._clusters[self.active_cluster][key] = value
-
-
 class ClusteredReplayBuffer(ReplayBuffer):
-    def __init__(self, size, cluster_on, n_clusters=5, recluster_every=1000, strategy="single"):
+    def __init__(self, size, cluster_on, n_clusters=5, recluster_every=0.25, strategy="single"):
         super().__init__(size)
-        self._storage = ClusterStorage(n_clusters)
         data_idxs = {"obs": 0, "action": 1, "reward": 2, "obs_tp1": 3, "done": 4}
-        self._cluster_on_idx = data_idxs[cluster_on]
+        if isinstance(cluster_on, list) or isinstance(cluster_on, tuple):
+            self._cluster_on_idx = [data_idxs[data_name] for data_name in cluster_on]
+        else:
+            self._cluster_on_idx = [data_idxs[cluster_on]]
         self.cluster_alg = KMeans(n_clusters)
         self._strategy = strategy
-        self._recluster_every = recluster_every
+        self._recluster_every = recluster_every  # TODO: should resample dynamically less and less
+        self._samples_until_recluster = 10000
+        self._cluster_sample_idxs = [[] for i in range(n_clusters)]
+        self._n_clusters = n_clusters
 
     def add(self, obs_t, action, reward, obs_tp1, done):
-        cluster_idx = self.cluster_alg.predict(obs_t[None])[0]  # TODO: cluster on
-        self._storage.active_cluster = cluster_idx
-        super().add(obs_t, action, reward, obs_tp1, done)
+        cluster_data = []
+        for cluster_data_idx in self._cluster_on_idx:
+            if cluster_data_idx == 0:
+                c_d = obs_t
+            elif cluster_data_idx == 1:
+                c_d = action
+            elif cluster_data_idx == 2:
+                c_d = reward
+            elif cluster_data_idx == 3:
+                c_d = obs_tp1,
+            elif cluster_data_idx == 4:
+                c_d = done
+            else:
+                raise ValueError
+            cluster_data.append(c_d)
+        cluster_data = np.concatenate(cluster_data)[None]
+        try:
+            cluster_idx = self.cluster_alg.predict(cluster_data)[0]
+        except NotFittedError:
+            cluster_idx = 0
+
+        data = [obs_t, action, reward, obs_tp1, done, cluster_idx]  # Use list to support reassignment of cluster
+        if self._next_idx >= len(self._storage):
+            self._storage.append(data)
+            self._cluster_sample_idxs[cluster_idx].append(self._next_idx)
+        else:
+            self._storage[self._next_idx] = data
+            self._cluster_sample_idxs[self._storage[self._next_idx][-1]].remove(self._next_idx)
+            self._cluster_sample_idxs[cluster_idx].append(self._next_idx)
+        self._next_idx = (self._next_idx + 1) % self._maxsize
+
+        self._samples_until_recluster -= 1
+        if self._samples_until_recluster <= 0:
+            self.fit_and_assign_clusters()
+            self._samples_until_recluster = int(max(20000, len(self) * self._recluster_every))
 
     def batch_add(self, batch):
-        cluster_idxs = self.cluster_alg.predict([s[self._cluster_on_idx] for s in batch])
+        cluster_idxs = self.cluster_alg.predict([np.concatenate([np.atleast_1d(s[idx]) for idx in self._cluster_on_idx]) for s in batch])
         for i, idx in enumerate(cluster_idxs):
-            self._storage.active_cluster = idx
-            self._storage.append(batch[i])
+            self._storage.append([*batch[i], idx])
+            self._cluster_sample_idxs[idx].append(i)
 
     def sample(self, batch_size, strategy=None):
         if strategy is None:
             strategy = self._strategy
         if strategy == "single":
-            cluster_idx = random.randint(0, self._storage.n_clusters - 1)
-            self._storage.active_cluster = cluster_idx
-            return super().sample(batch_size)
+            cluster_idx = random.randint(0, len(self._cluster_sample_idxs) - 1)
+            sample_idxs = [self._cluster_sample_idxs[cluster_idx][random.randint(0, len(self._cluster_sample_idxs[cluster_idx]) - 1)] for _ in range(batch_size)]
+            return super()._encode_sample(sample_idxs)
         elif strategy in ["uniform", "proportional"]:
             if strategy == "uniform":
-                samples_per_cluster = [batch_size // self._storage.n_clusters] * self._storage.n_clusters
-                num_samples_left_over = batch_size % self._storage.n_clusters
+                samples_per_cluster = [batch_size // self._n_clusters] * self._n_clusters
+                num_samples_left_over = batch_size % self._n_clusters
+                weights = None
             elif strategy == "proportional":
-                total_size = sum(self._storage.cluster_sizes)
-                samples_per_cluster = [int(self._storage.cluster_sizes[i] / total_size * batch_size) for i in range(self._storage.n_clusters)]
+                total_size = sum([len(c_s_i) for c_s_i in self._cluster_sample_idxs])
+                samples_per_cluster = [int(len(self._cluster_sample_idxs[i]) / total_size * batch_size) for i in range(self._n_clusters)]
                 num_samples_left_over = batch_size - sum(samples_per_cluster)
+                weights = samples_per_cluster
 
-            leftover_samples_cluster_idxs = random.choices(range(self._storage.n_clusters), k=num_samples_left_over)
+            leftover_samples_cluster_idxs = random.choices(range(len(self._cluster_sample_idxs)), k=num_samples_left_over,
+                                                           weights=weights)
             for idx in leftover_samples_cluster_idxs:
                 samples_per_cluster[idx] += 1
 
             data = [[] for i in range(5)]
-            for cluster_i in range(self._storage.n_clusters):
-                self._storage.active_cluster = cluster_i
-                c_s = super().sample(batch_size=samples_per_cluster[cluster_i])
+            for cluster_i in range(self._n_clusters):
+                sample_idxs = [self._cluster_sample_idxs[cluster_i][random.randint(0, len(self._cluster_sample_idxs[cluster_i]) - 1)]
+                               for _ in range(samples_per_cluster[cluster_i])]
+                c_s = super()._encode_sample(sample_idxs)
                 for i in range(5):
                     data[i].append(c_s[i])
 
@@ -176,15 +197,16 @@ class ClusteredReplayBuffer(ReplayBuffer):
         else:
             raise ValueError # TODO: even/uniform/distribution
 
-    def __len__(self):
-        tot_len = 0
-        orig_active_cluster = self._storage.active_cluster
-        for i in range(self._storage.n_clusters):
-            self._storage.active_cluster = i
-            tot_len += len(self._storage)
+    def fit_and_assign_clusters(self):
+        sample_cluster_idxs = self.cluster_alg.fit_predict([s[self._cluster_on_idx] for s in self._storage])
+        self._cluster_sample_idxs = [[] for i in range(len(self._cluster_sample_idxs))]
 
-        self._storage.active_cluster = orig_active_cluster
-        return tot_len
+        for s_i in range(len(self._storage)):
+            self._cluster_sample_idxs[sample_cluster_idxs[s_i]].append(s_i)
+            self._storage[s_i][-1] = sample_cluster_idxs[s_i]
+
+    def can_sample(self, n_samples):  # TODO: adjust for strategy etc.
+        return not any([len(c_s_i) < n_samples for c_s_i in self._cluster_sample_idxs])
 
 
 # TODO: lots of work to do on this one
