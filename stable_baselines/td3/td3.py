@@ -412,7 +412,7 @@ class TD3(OffPolicyRLModel):
             self.learning_rate_ph: learning_rate
         }
 
-        if self.recurrent_policy and self.scan_length > 0:
+        if self.recurrent_policy and self.scan_length > 0:  # TODO: fix bug when scan is used but save_state is false (no initial scan_state is provided)
             obs_scan = batch_extra.pop("scan_obs")  # TODO: ensure that target network gets state calculated for that batch sample by main network, or fix separate target state saving and calculation
             if self.target_policy_tf.save_target_state:
                 obs_tp1_scan = batch_extra.pop("scan_obs_tp1")
