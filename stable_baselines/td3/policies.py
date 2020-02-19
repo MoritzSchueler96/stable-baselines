@@ -518,8 +518,10 @@ class DRPolicy(RecurrentPolicy):
 
     def collect_data(self, _locals, _globals, **kwargs):
         data = super().collect_data(_locals, _globals)
-        if "my" not in _locals or _locals["ep_data"]:
+        if len(_locals["episode_data"]) == 0:
             data["my"] = _locals["self"].env.get_env_parameters()
+        else:
+            data["my"] = _locals["episode_data"][-1]["my"]
 
         return data
 
