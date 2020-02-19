@@ -731,7 +731,6 @@ class TD3(OffPolicyRLModel):
         return env
 
     def _get_env_parameters(self):
-        return np.zeros((37,))
         if isinstance(self.env, HERGoalEnvWrapper):
             return self.env.env.get_simulator_parameters()
         else:
