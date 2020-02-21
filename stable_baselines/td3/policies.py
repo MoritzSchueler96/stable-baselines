@@ -271,7 +271,7 @@ class RecurrentPolicy(TD3Policy):
         self.rnn_inputs = ["action", "action_prev", "obs"]  # TODO: rename to scan data?
         self.extra_data_names = ["action_prev", "target_action_prev"]
 
-        if self.save_target_state:
+        if self.save_target_state or add_state_phs is not None and any([n in add_state_phs for n in ["target", "both"]]):
             self.rnn_inputs = sorted(self.rnn_inputs + ["obs_tp1", "target_action_prev"])
 
         if self.save_state:

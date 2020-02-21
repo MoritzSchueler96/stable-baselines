@@ -188,7 +188,7 @@ class TD3(OffPolicyRLModel):
 
                         state_phs = None
                         if scan_length > 0:
-                            state_phs = "main"
+                            state_phs = "both"
                         if self.target_state_from_main:
                             assert self.policy_kwargs is None or not self.policy_kwargs.get("save_target_state", False)
                             state_phs = "target" if state_phs is None else "both"
@@ -480,10 +480,10 @@ class TD3(OffPolicyRLModel):
             default_data = {self.observations_ph: batch_extra.pop("scan_obs")}  # TODO: ensure that target network gets state calculated for that batch sample by main network, or fix separate target state saving and calculation
             if "scan_action" in batch_extra:
                 default_data[self.actions_ph] = batch_extra.pop("scan_action")
-            if self.target_policy_tf.save_target_state:
+            if self.target_policy_tf.save_target_state or not self.target_state_from_main:
                 default_data[self.next_observations_ph] = batch_extra.pop("scan_obs_tp1")
 
-            for seq_i in range(self.scan_length // self.sequence_length):
+            for seq_i in range(self.scan_length // self.sequence_length):  # TODO: fix bug where scan length > sequence length, then scan state for seq_i >= 1 is reset to what was collected from replay buffer
                 seq_data_idxs = np.zeros(shape=(self.scan_length,), dtype=np.bool)
                 seq_data_idxs[seq_i * self.sequence_length:(seq_i + 1) * self.sequence_length] = True
                 seq_data_idxs = np.tile(seq_data_idxs, self.batch_size // self.sequence_length)
@@ -493,17 +493,21 @@ class TD3(OffPolicyRLModel):
                 if self.policy_tf.share_rnn:
                     state_objects = [self.policy_tf.state]
                     state_names = ["state"]
-                    if self.target_policy_tf.save_target_state:
+                    if not self.target_state_from_main:
                         state_objects.append(self.target_policy_tf.state)
                         state_names.append("target_state")
                 else:
                     state_objects = [self.policy_tf.pi_state, self.policy_tf.qf1_state, self.policy_tf.qf2_state]
                     state_names = ["pi_state", "qf1_state", "qf2_state"]
-                    if self.target_policy_tf.save_target_state:
+                    if not self.target_state_from_main:
                         state_objects.extend([self.target_policy_tf.pi_state, self.target_policy_tf.qf1_state,
                                              self.target_policy_tf.qf2_state])
                         state_names.extend(["target_" + state_name for state_name in state_names])
-                feed_dict_scan.update({self.train_extra_phs[name]: batch_extra[name] for name in state_names})
+                for name in state_names:
+                    if name not in batch_extra:
+                        feed_dict_scan[self.train_extra_phs[name]] = self.policy_tf.initial_state
+                    else:
+                        feed_dict_scan[self.train_extra_phs[name]] = batch_extra[name]
                 states = self.sess.run(state_objects, feed_dict_scan)
                 updated_states = {k: states[i] for i, k in enumerate(state_names)}
                 batch_extra.update(updated_states)
