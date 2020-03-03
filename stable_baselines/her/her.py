@@ -140,8 +140,8 @@ class HER(BaseRLModel):
         data['her_action_space'] = self.action_space
         super()._save_to_file(save_path, data, params, cloudpickle=cloudpickle)
 
-    def save(self, save_path, cloudpickle=False):
-        self.model.save(save_path, cloudpickle=cloudpickle)
+    def save(self, save_path, cloudpickle=False, save_replay_buffer=False):
+        self.model.save(save_path, cloudpickle=cloudpickle, save_replay_buffer=save_replay_buffer)
 
     @classmethod
     def load(cls, load_path, env=None, custom_objects=None, **kwargs):
