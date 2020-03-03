@@ -140,8 +140,8 @@ class HER(BaseRLModel):
         data['her_action_space'] = self.action_space
         super()._save_to_file(save_path, data, params)
 
-    def save(self, save_path):
-        self.model.save(save_path)
+    def save(self, save_path, save_replay_buffer=False):
+        self.model.save(save_path, save_replay_buffer)
 
     @classmethod
     def load(cls, load_path, env=None, **kwargs):
