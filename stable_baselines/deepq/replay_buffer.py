@@ -175,7 +175,10 @@ class ClusteredReplayBuffer(ReplayBuffer):
         if strategy is None:
             strategy = self._strategy
         if strategy == "single":
-            cluster_idx = random.randint(0, len(self._cluster_sample_idxs) - 1)
+            cluster_sample_count = np.array([len(self._cluster_sample_idxs[c_i]) for c_i in range(self._n_clusters)])
+            cluster_idx = np.random.choice(range(self._n_clusters), p=cluster_sample_count / np.sum(cluster_sample_count))
+            sample_idxs = [self._cluster_sample_idxs[cluster_idx][random.randint(0, len(self._cluster_sample_idxs[cluster_idx]) - 1)] for _ in range(batch_size)]
+            return super()._encode_sample(sample_idxs)
             sample_idxs = [self._cluster_sample_idxs[cluster_idx][random.randint(0, len(self._cluster_sample_idxs[cluster_idx]) - 1)] for _ in range(batch_size)]
             return super()._encode_sample(sample_idxs)
         elif strategy in ["uniform", "proportional"]:
