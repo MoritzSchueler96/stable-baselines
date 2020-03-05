@@ -214,7 +214,7 @@ class ClusteredReplayBuffer(ReplayBuffer):
             raise ValueError # TODO: even/uniform/distribution
 
     def fit_and_assign_clusters(self):
-        sample_cluster_idxs = self.cluster_alg.fit_predict([s[self._cluster_on_idx] for s in self._storage])
+        sample_cluster_idxs = self.cluster_alg.fit_predict([np.concatenate([s[c_i] for c_i in self._cluster_on_idx]) for s in self._storage])
         self._cluster_sample_idxs = [[] for i in range(len(self._cluster_sample_idxs))]
 
         for s_i in range(len(self._storage)):
