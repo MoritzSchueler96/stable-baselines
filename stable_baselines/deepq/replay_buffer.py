@@ -156,6 +156,7 @@ class ClusteredReplayBuffer(ReplayBuffer):
             cluster_idx = 0
 
         data = [obs_t, action, reward, obs_tp1, done, *extra_data, *[extra_data_kwargs[k] for k in sorted(extra_data_kwargs)]]
+        data.append(cluster_idx)
         if self._next_idx >= len(self._storage):
             self._storage.append(data)
             self._cluster_sample_idxs[cluster_idx].append(self._next_idx)
