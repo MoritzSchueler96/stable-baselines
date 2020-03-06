@@ -194,8 +194,12 @@ class ClusteredReplayBuffer(ReplayBuffer):
                 weights = None
             elif strategy == "proportional":
                 total_size = sum([len(c_s_i) for c_s_i in self._cluster_sample_idxs])
-                samples_per_cluster = [int(len(self._cluster_sample_idxs[i]) / total_size * batch_size) for i in range(self._n_clusters)]
-                num_samples_left_over = batch_size - sum(samples_per_cluster)
+                samples_per_cluster = np.array([max(int(len(self._cluster_sample_idxs[i]) / total_size * batch_size), 1) for i in range(self._n_clusters)])
+                num_samples_left_over = batch_size - np.sum(samples_per_cluster)
+                if num_samples_left_over < 0:
+                    highest_sample_counts_idxs = np.argpartition(samples_per_cluster, num_samples_left_over)[num_samples_left_over:]
+                    samples_per_cluster[highest_sample_counts_idxs] -= 1
+                    num_samples_left_over = 0
                 weights = samples_per_cluster
 
             leftover_samples_cluster_idxs = random.choices(range(len(self._cluster_sample_idxs)), k=num_samples_left_over,
