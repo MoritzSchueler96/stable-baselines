@@ -54,7 +54,7 @@ class ReplayBuffer(object):
         """
         return len(self) == self.buffer_size
 
-    def add(self, obs_t, action, reward, obs_tp1, done, *extra_data, **extra_data_kwargs):
+    def add(self, obs_t, action, reward, obs_tp1, done, *extra_data, bootstrap=None, **extra_data_kwargs):
         """
         add a new transition to the buffer
 
@@ -64,6 +64,8 @@ class ReplayBuffer(object):
         :param obs_tp1: (Any) the current observation
         :param done: (bool) is the episode done
         """
+        if bootstrap is not None:
+            done = not bootstrap
         data = (obs_t, action, reward, obs_tp1, done, *extra_data,
                 *[extra_data_kwargs[k] for k in sorted(extra_data_kwargs)])
 
