@@ -62,9 +62,9 @@ class TD3(OffPolicyRLModel):
                  learning_starts=100, train_freq=100, gradient_steps=100, batch_size=128,
                  tau=0.005, policy_delay=2, action_noise=None, action_l2_scale=0,
                  target_policy_noise=0.2, target_noise_clip=0.5, optimizer="adam",
-                 random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None, tb_log_weights=False,
+                 random_exploration=0.0, verbose=0, write_freq=1, tensorboard_log=None,
                  _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, time_aware=False,
-                 reward_transformation=None, target_state_from_main=False, clip_q_target=None):
+                 reward_transformation=None, target_state_from_main=False, clip_q_target=None, actor=None):
         super(TD3, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, write_freq=write_freq,
                                   policy_base=TD3Policy, requires_vec_env=False, policy_kwargs=policy_kwargs)
 
@@ -89,7 +89,6 @@ class TD3(OffPolicyRLModel):
         self.target_noise_clip = target_noise_clip
         self.target_policy_noise = target_policy_noise
 
-        self.tb_log_weights = tb_log_weights
 
         self.time_aware = time_aware
 
@@ -319,11 +318,13 @@ class TD3(OffPolicyRLModel):
 
                 policy_pre_activation = self.policy_tf.policy_pre_activation
 
-                if self.tb_log_weights:
-                    for var in tf.trainable_variables():
+                if self.full_tensorboard_log:
+                    for var in get_vars("model"):
                         tf.summary.histogram(var.name, var)
-
-                tf.summary.histogram("PI state", self.policy_tf.pi_state)
+                if self.recurrent_policy and self.policy_tf.keras_reuse:
+                    tf.summary.histogram("rnn/PI state", self.policy_tf.pi_state)
+                    tf.summary.histogram("rnn/QF1 state", self.policy_tf.qf1_state)
+                    tf.summary.histogram("rnn/QF2 state", self.policy_tf.qf2_state)
 
                 # TODO: introduce somwehere here the placeholder for history which updates internal state?
                 with tf.variable_scope("loss", reuse=False):
@@ -421,6 +422,17 @@ class TD3(OffPolicyRLModel):
                 # Retrieve parameters that must be saved
                 self.params = get_vars("model")
                 self.target_params = get_vars("target/")
+
+                if self.full_tensorboard_log:
+                    policy_grads = policy_optimizer.compute_gradients(policy_loss)
+                    for g in policy_grads:
+                        if g[0] is not None and g[1] in policy_vars:
+                            tf.summary.histogram("grad-policy/{}".format(g[1].name), g[0])
+
+                    qf_grads = qvalues_optimizer.compute_gradients(qvalues_losses)
+                    for g in qf_grads:
+                        if g[0] is not None and g[1] in qvalues_params:
+                            tf.summary.histogram("grad-qf/{}".format(g[1].name), g[0])
 
                 # Initialize Variables and target network
                 with self.sess.as_default():
