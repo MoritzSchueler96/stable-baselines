@@ -306,6 +306,14 @@ class TD3(OffPolicyRLModel):
 
                 policy_pre_activation = self.policy_tf.policy_pre_activation
 
+                if self.full_tensorboard_log:
+                    for var in get_vars("model"):
+                        tf.summary.histogram(var.name, var)
+                if self.recurrent_policy and self.policy_tf.keras_reuse:
+                    tf.summary.histogram("rnn/PI state", self.policy_tf.pi_state)
+                    tf.summary.histogram("rnn/QF1 state", self.policy_tf.qf1_state)
+                    tf.summary.histogram("rnn/QF2 state", self.policy_tf.qf2_state)
+
                 # TODO: introduce somwehere here the placeholder for history which updates internal state?
                 with tf.variable_scope("loss", reuse=False):
                     # Take the min of the two target Q-Values (clipped Double-Q Learning)
@@ -397,6 +405,17 @@ class TD3(OffPolicyRLModel):
                 # Retrieve parameters that must be saved
                 self.params = tf_util.get_trainable_vars("model")
                 self.target_params = tf_util.get_trainable_vars("target/")
+
+                if self.full_tensorboard_log:
+                    policy_grads = policy_optimizer.compute_gradients(policy_loss)
+                    for g in policy_grads:
+                        if g[0] is not None and g[1] in policy_vars:
+                            tf.summary.histogram("grad-policy/{}".format(g[1].name), g[0])
+
+                    qf_grads = qvalues_optimizer.compute_gradients(qvalues_losses)
+                    for g in qf_grads:
+                        if g[0] is not None and g[1] in qvalues_params:
+                            tf.summary.histogram("grad-qf/{}".format(g[1].name), g[0])
 
                 # Initialize Variables and target network
                 with self.sess.as_default():
