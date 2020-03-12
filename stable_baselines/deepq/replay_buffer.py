@@ -116,19 +116,21 @@ class ReplayBuffer(object):
 
 
 class ClusteredReplayBuffer(ReplayBuffer):
-    def __init__(self, size, cluster_on, n_clusters=5, recluster_every=0.25, strategy="single"):
+    def __init__(self, size, cluster_on, n_clusters=5, recluster_every=0.25, strategy="single", fixed_idx=None, reducer=None, seed=None):
         super().__init__(size)
         data_idxs = {"obs": 0, "action": 1, "reward": 2, "obs_tp1": 3, "done": 4}
         if isinstance(cluster_on, list) or isinstance(cluster_on, tuple):
             self._cluster_on_idx = [data_idxs[data_name] for data_name in cluster_on]
         else:
             self._cluster_on_idx = [data_idxs[cluster_on]]
-        self.cluster_alg = KMeans(n_clusters)
+        self.cluster_alg = KMeans(n_clusters, random_state=seed)
         self._strategy = strategy
+        self._fixed_idx = fixed_idx
         self._recluster_every = recluster_every  # TODO: should resample dynamically less and less
         self._samples_until_recluster = 10000
         self._cluster_sample_idxs = [[] for i in range(n_clusters)]
         self._n_clusters = n_clusters
+        self.reducer = reducer
 
     def add(self, obs_t, action, reward, obs_tp1, done, *extra_data, bootstrap=None, **extra_data_kwargs):
         if bootstrap is not None:
