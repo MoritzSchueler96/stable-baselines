@@ -707,11 +707,11 @@ class TD3(OffPolicyRLModel):
         vectorized_env = self._is_vectorized_observation(observation, self.observation_space)
 
         observation = observation.reshape((-1,) + self.observation_space.shape)
-        state = None
         if self.recurrent_policy:
             actions, state = self.policy_tf_act.step(observation, state=state, mask=mask)
         else:
-            actions = self.policy_tf.step(observation)
+            actions = self.policy_tf.step(observation, mask=mask)
+            state = None
 
         if self.action_noise is not None and not deterministic:
             actions = np.clip(actions + self.action_noise(), -1, 1)
