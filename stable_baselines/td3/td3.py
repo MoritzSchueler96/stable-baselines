@@ -799,7 +799,8 @@ class TD3(OffPolicyRLModel):
         if self.recurrent_policy:
             actions, state = self.policy_tf_act.step(observation, state=state, mask=mask)
         else:
-            actions = self.policy_tf.step(observation)
+            actions = self.policy_tf.step(observation, mask=mask)
+            state = None
 
         if self.action_noise is not None and not deterministic:
             actions = np.clip(actions + self.action_noise(), -1, 1)
