@@ -110,7 +110,7 @@ class HER(BaseRLModel):
               reset_num_timesteps=True):
         return self.model.learn(total_timesteps, callback=callback, log_interval=log_interval,
                                 tb_log_name=tb_log_name, reset_num_timesteps=reset_num_timesteps,
-                                replay_wrapper=self.replay_wrapper)
+                                replay_wrapper=self.replay_wrapper if not isinstance(self.replay_buffer, self.replay_wrapper.func) else None)
 
     def _check_obs(self, observation):
         if isinstance(observation, dict):
@@ -159,5 +159,6 @@ class HER(BaseRLModel):
         model.__dict__['observation_space'] = data['her_obs_space']
         model.__dict__['action_space'] = data['her_action_space']
         model.model = data['model_class'].load(load_path, model.get_env(), **kwargs)
+        model.model.replay_buffer.episode_transitions = []
         model.model._save_to_file = model._save_to_file
         return model
