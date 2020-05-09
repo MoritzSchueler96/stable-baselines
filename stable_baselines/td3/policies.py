@@ -141,7 +141,7 @@ class FeedForwardPolicy(TD3Policy):
 
         return policy
 
-    def make_critics(self, obs=None, action=None, reuse=False, scope="values_fn"):
+    def make_critics(self, obs=None, action=None, reuse=False, scope="values_fn", extracted_callback=None):
         if obs is None:
             obs = self.processed_obs
 
@@ -154,7 +154,8 @@ class FeedForwardPolicy(TD3Policy):
             else:
                 critics_h = tf.layers.flatten(obs)
 
-            self.extracted = critics_h
+            if extracted_callback is not None:
+                critics_h = extracted_callback(critics_h)
 
             # Concatenate preprocessed state and action
             qf_h = tf.concat([critics_h, action], axis=-1)
@@ -514,7 +515,7 @@ class DRPolicy(RecurrentPolicy):
 
     def collect_data(self, _locals, _globals, **kwargs):
         data = super().collect_data(_locals, _globals)
-        if "my" not in _locals or _locals["ep_data"]:
+        if "my" not in _locals or _locals["episode_data"]:
             data["my"] = _locals["self"].env.get_env_parameters()
 
         return data
