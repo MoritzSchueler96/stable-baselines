@@ -545,7 +545,7 @@ class SAC(OffPolicyRLModel):
         return (self.params +
                 self.target_params)
 
-    def save(self, save_path, cloudpickle=False):
+    def save(self, save_path, cloudpickle=False, save_replay_buffer=False):
         data = {
             "learning_rate": self.learning_rate,
             "buffer_size": self.buffer_size,
@@ -573,6 +573,8 @@ class SAC(OffPolicyRLModel):
             "policy_kwargs": self.policy_kwargs,
             "num_timesteps": self.num_timesteps
         }
+        if save_replay_buffer:
+            data["replay_buffer"] = self.replay_buffer
 
         params_to_save = self.get_parameters()
 
