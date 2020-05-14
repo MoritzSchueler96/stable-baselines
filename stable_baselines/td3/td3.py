@@ -15,7 +15,7 @@ from stable_baselines.td3.policies import TD3Policy, RecurrentPolicy, DRPolicy
 from stable_baselines import logger
 from stable_baselines.common.schedules import ExponentialSchedule
 
-test = False
+
 class TD3(OffPolicyRLModel):
     """
     Twin Delayed DDPG (TD3)
