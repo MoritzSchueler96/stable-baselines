@@ -649,6 +649,25 @@ class DRCnnMlpPolicy(FeedForwardPolicy):
         if my is None:
             my = self.my_ph
 
+        return super().make_critics(obs, action, reuse, scope, extracted_callback=lambda x: tf.concat([x, my], axis=-1))
+
+    def collect_data(self, _locals, _globals):
+        data = []
+        for env_i in range(_locals["self"].n_envs):
+            d = {}
+            if len(_locals["episode_data"][env_i]) == 0 or "my" not in _locals["episode_data"][env_i]:
+                if _locals["self"].n_envs == 1:
+                    d["my"] = _locals["self"].env.get_env_parameters()
+                else:
+                    d["my"] = _locals["self"].env.env_method("get_env_parameters", indices=env_i)[0]
+            else:
+                d["my"] = _locals["episode_data"][env_i][-1]["my"]
+
+            d["target_my"] = d["my"]
+            data.append(d)
+
+        return data
+
         qf1, qf2 = super().make_critics(obs, action, reuse, scope)
 
         self.extracted = tf.concat([self.extracted, my], axis=-1)
