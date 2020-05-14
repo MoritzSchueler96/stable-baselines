@@ -116,6 +116,7 @@ class TD3(OffPolicyRLModel):
         self.next_observations_ph = None
         self.is_weights_ph = None
         self.step_ops = None
+        self.policy_step_ops = None
         self.target_ops = None
         self.infos_names = None
         self.target_params = None
@@ -342,8 +343,12 @@ class TD3(OffPolicyRLModel):
                     rew_loss = tf.reduce_mean(qf1_pi)
                     action_loss = self.action_l2_scale * tf.nn.l2_loss(policy_pre_activation)
 
-                    # Policy loss: maximise q value
                     self.policy_loss = policy_loss = -rew_loss + action_loss
+                    # Policy loss: maximise q value
+                    if hasattr(self.policy_tf, "policy_loss"):
+                        tf.summary.scalar("custom_policy_loss", self.policy_tf.policy_loss)
+                        self.policy_loss += self.policy_tf.policy_loss
+                        policy_loss = self.policy_loss
 
                     # Policy train op
                     # will be called only every n training steps,
@@ -382,6 +387,12 @@ class TD3(OffPolicyRLModel):
                     # All ops to call during one training step
                     self.step_ops = [qf1_loss, qf2_loss,
                                      qf1, qf2, train_values_op]
+                    if hasattr(self.policy_tf, "step_ops"):
+                        self.step_ops.extend(self.policy_tf.step_ops)
+                    self.policy_step_ops = [self.policy_train_op, self.target_ops, self.policy_loss]
+                    if hasattr(self.policy_tf, "policy_step_ops"):
+                        self.policy_step_ops.extend(self.policy_tf.policy_step_ops)
+
                     if self.recurrent_policy and self.policy_tf.save_state:
                         if self.policy_tf.share_lstm:
                             state_objects = [self.policy_tf.state]
@@ -486,7 +497,7 @@ class TD3(OffPolicyRLModel):
         step_ops = self.step_ops
         if update_policy:
             # Update policy and target networks
-            step_ops = step_ops + [self.policy_train_op, self.target_ops, self.policy_loss]
+            step_ops = step_ops + self.policy_step_ops
 
         # Do one gradient step
         # and optionally compute log for tensorboard
