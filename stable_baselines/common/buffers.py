@@ -123,12 +123,12 @@ class ReplayBuffer(object):
             obses_tp1.append(np.array(obs_tp1, copy=False))
             dones.append(done)
 
-        for data_i, extra_data_name in enumerate(self._extra_data_names):
-            data = extra_timestep_data[data_i]
-            if np.ndim(data) == 0:
-                extra_data[extra_data_name].append(data)
-            else:
-                extra_data[extra_data_name].append(np.array(data, copy=False))
+            for data_i, extra_data_name in enumerate(self._extra_data_names):
+                data = extra_timestep_data[data_i]
+                if np.ndim(data) == 0:
+                    extra_data[extra_data_name].append(data)
+                else:
+                    extra_data[extra_data_name].append(np.array(data, copy=False))
 
         extra_data = {k: np.array(v) for k, v in extra_data.items()}
 
