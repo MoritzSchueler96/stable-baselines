@@ -251,6 +251,32 @@ class SubprocVecEnv(VecEnv):
         indices = self._get_indices(indices)
         return [self.remotes[i] for i in indices]
 
+    def convert_obs_to_dict(self, obs):
+        self.remotes[0].send(("env_method", ("convert_obs_to_dict", [obs], {})))
+        return self.remotes[0].recv()
+
+    def convert_dict_to_obs(self, obs):
+        self.remotes[0].send(("env_method", ("convert_dict_to_obs", [obs], {})))
+        return self.remotes[0].recv()
+
+    def compute_reward(self, a_goal, d_goal, info):
+        self.remotes[0].send(("env_method", ("compute_reward", [a_goal, d_goal, info], {})))
+        return self.remotes[0].recv()
+
+    def load_running_average(self, path, suffix=None):
+        target_remotes = self._get_target_remotes(None)
+        for remote in target_remotes:
+            remote.send(("env_method", ("load_running_average", [path, suffix], {})))
+
+        return [remote.recv() for remote in target_remotes]
+
+    def save_running_average(self, path, suffix=None):
+        target_remotes = self._get_target_remotes(None)
+        for remote in target_remotes:
+            remote.send(("env_method", ("save_running_average", [path, suffix], {})))
+
+        return [remote.recv() for remote in target_remotes]
+
 
 def _flatten_obs(obs, space):
     """

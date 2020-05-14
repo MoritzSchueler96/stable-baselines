@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
 import numpy as np
+import copy
 
 
 class AdaptiveParamNoiseSpec(object):
@@ -121,3 +122,33 @@ class OrnsteinUhlenbeckActionNoise(ActionNoise):
 
     def __repr__(self) -> str:
         return 'OrnsteinUhlenbeckActionNoise(mu={}, sigma={})'.format(self._mu, self._sigma)
+
+
+class ActionNoiseMPWrapper(ActionNoise):
+    """
+    A wrapper for Action Noise classes implementing support for training with multiple environments.
+
+    :param action_noise: (ActionNoise) The base action noise class
+    :param n_procs: (int) The number of environments/processes
+    """
+    def __init__(self, action_noise, n_procs):
+        super().__init__()
+        self.action_noise = []
+        self.n_procs = n_procs
+        for i in range(n_procs):
+            self.action_noise.append(copy.deepcopy(action_noise))
+
+    def reset(self, indices=None):
+        if indices is None:
+            indices = list(range(self.n_procs))
+        if isinstance(indices, int):
+            indices = [indices]
+
+        for i in indices:
+            self.action_noise[i].reset()
+
+    def __call__(self) -> np.ndarray:
+        noise = []
+        for i in range(self.n_procs):
+            noise.append(self.action_noise[i]())
+        return np.array(noise)

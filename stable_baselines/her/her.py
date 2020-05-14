@@ -3,7 +3,7 @@ import functools
 from stable_baselines.common import BaseRLModel
 from stable_baselines.common import OffPolicyRLModel
 from stable_baselines.common.base_class import _UnvecWrapper
-from stable_baselines.common.vec_env import VecEnvWrapper
+from stable_baselines.common.vec_env import VecEnvWrapper, VecEnv
 from .replay_buffer import HindsightExperienceReplayWrapper, KEY_TO_GOAL_STRATEGY
 from .utils import HERGoalEnvWrapper
 
@@ -58,7 +58,9 @@ class HER(BaseRLModel):
         Wrap the environment in a HERGoalEnvWrapper
         if needed and create the replay buffer wrapper.
         """
-        if not isinstance(env, HERGoalEnvWrapper):
+        if (isinstance(env, VecEnvWrapper) or isinstance(env, VecEnv)):
+            pass # TODO: figure out how to know if VecEnv is HerGoalEnvWrapper
+        elif not isinstance(env, HERGoalEnvWrapper):
             env = HERGoalEnvWrapper(env, norm)
 
         self.env = env

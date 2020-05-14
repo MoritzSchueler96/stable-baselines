@@ -513,10 +513,20 @@ class DRPolicy(RecurrentPolicy):
         rnn_phs = [obs_rnn, action_prev]
         return super().make_critics(ff_phs=ff_phs, rnn_phs=rnn_phs, dones=dones, reuse=reuse, scope=scope)
 
-    def collect_data(self, _locals, _globals, **kwargs):
+    def collect_data(self, _locals, _globals, **kwargs):  # TODO: update for multiprocessing
+        data = []
         data = super().collect_data(_locals, _globals)
-        if "my" not in _locals or _locals["episode_data"]:
-            data["my"] = _locals["self"].env.get_env_parameters()
+        for env_i in range(_locals["self"].n_envs):
+            d = {}
+            if len(_locals["episode_data"][env_i]) == 0 or "my" not in _locals["episode_data"][env_i]:
+                if _locals["self"].n_envs == 1:
+                    d["my"] = _locals["self"].env.get_env_parameters()
+                else:
+                    d["my"] = _locals["self"].env.env_method("get_env_parameters", indices=env_i)[0]
+            else:
+                d["my"] = _locals["episode_data"][env_i][-1]["my"]
+
+            data.append(d)
 
         return data
 

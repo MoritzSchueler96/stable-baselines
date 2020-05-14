@@ -83,14 +83,14 @@ class BaseRLModel(ABC):
                         print("Wrapping the env in a DummyVecEnv.")
                     self.n_envs = 1
             else:
-                if isinstance(env, VecEnv):
+                if isinstance(env, VecEnv) and False:
                     if env.num_envs == 1:
                         self.env = _UnvecWrapper(env)
                         self._vectorize_action = True
                     else:
                         raise ValueError("Error: the model requires a non vectorized environment or a single vectorized"
                                          " environment.")
-                self.n_envs = 1
+                self.n_envs = env.num_envs
 
         # Get VecNormalize object if it exists
         self._vec_normalize_env = unwrap_vec_normalize(self.env)

@@ -4,6 +4,7 @@ import warnings
 
 import numpy as np
 import tensorflow as tf
+import copy
 
 from stable_baselines.her import HindsightExperienceReplayWrapper, HERGoalEnvWrapper
 from stable_baselines.common import tf_util, OffPolicyRLModel, SetVerbosity, TensorboardWriter
@@ -95,6 +96,7 @@ class TD3(OffPolicyRLModel):
         self.time_aware = time_aware
 
         self.reward_transformation = reward_transformation
+
 
         self.graph = None
         self.replay_buffer = None
@@ -537,6 +539,13 @@ class TD3(OffPolicyRLModel):
             self.train_freq = self.train_freq[0]
             self.gradient_steps = self.gradient_steps[0]
 
+        action_space = copy.deepcopy(self.action_space)
+        if self.n_envs > 1:
+            action_space.sample = lambda : np.array([self.action_space.sample() for _ in range(self.n_envs)])
+            action_space.low = np.repeat(action_space.low[np.newaxis, ...], self.n_envs, axis=0)
+            action_space.high = np.repeat(action_space.high[np.newaxis, ...], self.n_envs, axis=0)
+            action_space.shape = action_space.low.shape
+
         with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
                 as writer:
 
@@ -548,7 +557,7 @@ class TD3(OffPolicyRLModel):
             current_lr = self.learning_rate(1)
 
             start_time = time.time()
-            episode_rewards = [0.0]
+            episode_rewards = [[0.0] for _ in range(self.n_envs)]
             episode_successes = []
             if self.action_noise is not None:
                 self.action_noise.reset()
@@ -557,10 +566,11 @@ class TD3(OffPolicyRLModel):
             if self._vec_normalize_env is not None:
                 obs_ = self._vec_normalize_env.get_original_obs().squeeze()
             n_updates = 0
-            infos_values = []
+            infos_values = [[] for _ in range(self.n_envs)]
             self.active_sampling = False
             initial_step = self.num_timesteps
-            episode_data = []
+            episode_data = [[] for _ in range(self.n_envs)]
+            done = [[False] for _ in range(self.n_envs)]
 
             callback.on_training_start(locals(), globals())
             callback.on_rollout_start()
@@ -572,11 +582,10 @@ class TD3(OffPolicyRLModel):
                 self._set_prioritized_buffer()
 
             if self.recurrent_policy:
-                done = False
                 policy_state = self.policy_tf_act.initial_state
                 prev_policy_state = self.policy_tf_act.initial_state  # Keep track of this so it doesnt have to be recalculated when saving it to replay buffer
 
-            for step in range(initial_step, total_timesteps):
+            for step in range(initial_step, total_timesteps, self.n_envs):
                 # Before training starts, randomly sample actions
                 # from a uniform distribution for better exploration.
                 # Afterwards, use the learned policy
@@ -584,26 +593,29 @@ class TD3(OffPolicyRLModel):
                 if self.num_timesteps < self.learning_starts or np.random.rand() < self.random_exploration:
                     # actions sampled from action space are from range specific to the environment
                     # but algorithm operates on tanh-squashed actions therefore simple scaling is used
-                    unscaled_action = self.env.action_space.sample()
-                    action = scale_action(self.action_space, unscaled_action)
+                    unscaled_action = action_space.sample()
+                    action = scale_action(action_space, unscaled_action)
                 else:
                     if self.recurrent_policy:
                         action, policy_state = self.policy_tf_act.step(obs[None], state=policy_state, mask=np.array(done)[None])
                         action = action.flatten()
                     else:
-                        action = self.policy_tf.step(obs[None]).flatten()
+                        if self.n_envs == 1:
+                            action = self.policy_tf.step(obs[None], mask=np.array(done)[None]).flatten()
+                        else:
+                            action = self.policy_tf.step(obs, mask=done)
                     # Add noise to the action, as the policy
                     # is deterministic, this is required for exploration
                     if self.action_noise is not None:
                         action = np.clip(action + self.action_noise(), -1, 1)
                     # Rescale from [-1, 1] to the correct bounds
-                    unscaled_action = unscale_action(self.action_space, action)
+                    unscaled_action = unscale_action(action_space, action)
 
-                assert action.shape == self.env.action_space.shape
+                assert action.shape == action_space.shape
 
                 new_obs, reward, done, info = self.env.step(unscaled_action)
 
-                self.num_timesteps += 1
+                self.num_timesteps += self.n_envs
 
                 # Only stop training if return value is False, not when it is None. This is for backwards
                 # compatibility with callbacks that have no return statement.
@@ -622,26 +634,36 @@ class TD3(OffPolicyRLModel):
                     reward = self.reward_transformation(reward)
 
                 # Store transition in the replay buffer.
-                extra_data = {}
+                extra_data = [{} for _ in range(self.n_envs)]
                 if self.time_aware:
-                    bootstrap = True
-                    if done:
-                        info_time_limit = info.get("TimeLimit.truncated", None)
-                        bootstrap = info.get("termination", None) == "steps" or \
-                                    (info_time_limit is not None and info_time_limit)
-                    extra_data["bootstrap"] = bootstrap
+                    for env_i in range(self.n_envs):
+                        bootstrap = True
+                        if done[env_i]:
+                            info_time_limit = info[env_i].get("TimeLimit.truncated", None)
+                            bootstrap = info[env_i].get("termination", None) == "steps" or \
+                                        (info_time_limit is not None and info_time_limit)
+                        extra_data[env_i]["bootstrap"] = bootstrap
 
                 if hasattr(self.policy, "collect_data"):
                     if self.recurrent_policy:
-                        extra_data.update(self.policy_tf_act.collect_data(locals(), globals()))
+                        extra_data[env_i].update(self.policy_tf_act.collect_data(locals(), globals()))
                         if self.policy_tf.save_target_state:
                             extra_data.update({"target_" + state_name: self.target_policy_tf.initial_state[0, :]
                                                for state_name in (["state"] if self.target_policy_tf.share_lstm
                                                                   else ["pi_state", "qf1_state", "qf2_state"])})
                     else:
-                        extra_data.update(self.policy_tf.collect_data(locals(), globals()))
-                self.replay_buffer.add(obs, action, reward, new_obs, done, **extra_data) # Extra data must be sent as kwargs to support separate bootstrap and done signals (needed for HER style algorithms)
-                episode_data.append({"obs": obs, "action": action, "reward": reward, "obs_tp1": new_obs, "done": done, **extra_data})
+                        policy_data = self.policy_tf.collect_data(locals(), globals())
+                    for env_i in range(self.n_envs):
+                        extra_data[env_i].update(policy_data[env_i])
+                if self.n_envs == 1:
+                    self.replay_buffer.add(obs, action, reward, new_obs, done, **extra_data) # Extra data must be sent as kwargs to support separate bootstrap and done signals (needed for HER style algorithms)
+                elif True:  # IF using HER
+                    for i in range(self.n_envs):
+                        self.replay_buffer.add(obs[i], action[i], reward[i], new_obs[i], done[i], **extra_data[i], env_i=i)
+                else:
+                    self.replay_buffer.extend(obs, action, reward, new_obs, done, **extra_data)
+                for env_i in range(self.n_envs):
+                    episode_data[env_i].append({"obs": obs, "action": action, "reward": reward, "obs_tp1": new_obs, "done": done, **extra_data[env_i]})
                 obs = new_obs
 
                 # Save the unnormalized observation
@@ -654,18 +676,19 @@ class TD3(OffPolicyRLModel):
                     self.replay_buffer.rebalance()
 
                 # Retrieve reward and episode length if using Monitor wrapper
-                maybe_ep_info = info.get('episode')
-                if maybe_ep_info is not None and self.num_timesteps >= self.learning_starts:
-                    self.ep_info_buf.extend([maybe_ep_info])
+                for env_i in range(self.n_envs):
+                    maybe_ep_info = info[env_i].get('episode')
+                    if maybe_ep_info is not None and self.num_timesteps >= self.learning_starts:
+                        self.ep_info_buf.extend([maybe_ep_info])
 
                 if writer is not None:
                     # Write reward per episode to tensorboard
-                    ep_reward = np.array([reward_]).reshape((1, -1))
-                    ep_done = np.array([done]).reshape((1, -1))
+                    ep_reward = np.array([reward_]).reshape((self.n_envs, -1))
+                    ep_done = np.array([done]).reshape((self.n_envs, -1))
                     tf_util.total_episode_reward_logger(self.episode_reward, ep_reward,
                                                         ep_done, writer, self.num_timesteps)
 
-                if self.num_timesteps % self.train_freq == 0:
+                if (self.num_timesteps // self.n_envs) % self.train_freq == 0:
                     callback.on_rollout_end()
 
                     mb_infos_vals = []
@@ -692,39 +715,36 @@ class TD3(OffPolicyRLModel):
                         infos_values = np.mean(mb_infos_vals, axis=0)
                     callback.on_rollout_start()
 
-                episode_rewards[-1] += reward
                 if self.recurrent_policy:
                     prev_policy_state = policy_state
-                if done:
-                    if isinstance(self.replay_buffer, DiscrepancyReplayBuffer) and n_updates - last_replay_update >= 5000:
-                        self.replay_buffer.update_priorities()
-                        last_replay_update = n_updates
-                    if self.action_noise is not None:
-                        self.action_noise.reset()
-                    if not isinstance(self.env, VecEnv):
-                        if self.active_sampling:
-                            sample_obs, sample_state = self.env.get_random_initial_states(25)
-                            obs_discrepancies = self.policy_tf.get_q_discrepancy(sample_obs)
-                            obs = self.env.reset(**sample_state[np.argmax(obs_discrepancies)])
-                        else:
-                            obs = self.env.reset()
-                    episode_data = []
-                    episode_rewards.append(0.0)
-                    if self.recurrent_policy:
-                        prev_policy_state = self.policy_tf_act.initial_state
+                for env_i in range(self.n_envs):
+                    episode_rewards[env_i][-1] += reward[env_i]
+                    if done[env_i]:
+                        if isinstance(self.replay_buffer, DiscrepancyReplayBuffer) and n_updates - last_replay_update >= 5000:
+                            self.replay_buffer.update_priorities()
+                            last_replay_update = n_updates
+                        if self.action_noise is not None:
+                            if self.n_envs > 1:
+                                self.action_noise.reset(env_i)
+                            else:
+                                self.action_noise.reset()
+                        if not isinstance(self.env, VecEnv):
+                            if self.active_sampling:
+                                sample_obs, sample_state = self.env.get_random_initial_states(25)
+                                obs_discrepancies = self.policy_tf.get_q_discrepancy(sample_obs)
+                                obs = self.env.reset(**sample_state[np.argmax(obs_discrepancies)])
+                            else:
+                                obs = self.env.reset()
+                        episode_data[env_i] = []
+                        episode_rewards[env_i].append(0.0)
+                        if self.recurrent_policy:
+                            prev_policy_state = self.policy_tf_act.initial_state
 
-                    maybe_is_success = info.get('is_success')
-                    if maybe_is_success is not None:
-                        episode_successes.append(float(maybe_is_success))
+                        maybe_is_success = info[env_i].get('is_success')
+                        if maybe_is_success is not None:
+                            episode_successes.append(float(maybe_is_success))
 
-                if len(episode_rewards[-101:-1]) == 0:
-                    mean_reward = -np.inf
-                else:
-                    mean_reward = round(float(np.mean(episode_rewards[-101:-1])), 1)
-
-                num_episodes = len(episode_rewards)
-
-                self.num_timesteps += 1
+                num_episodes = sum([len(ep_rews) for ep_rews in episode_rewards])
 
                 if self.buffer_is_prioritized and \
                         ((replay_wrapper is not None and self.replay_buffer.replay_buffer.__name__ == "ReplayBuffer")
@@ -733,8 +753,13 @@ class TD3(OffPolicyRLModel):
                     self._set_prioritized_buffer()
 
                 # Display training infos
-                if self.verbose >= 1 and done and log_interval is not None and len(episode_rewards) % log_interval == 0:
-                    fps = int(step / (time.time() - start_time))
+                if self.verbose >= 1 and done[0] and log_interval is not None and len(episode_rewards[0]) % log_interval == 0:
+                    if len(episode_rewards[0][-101:-1]) == 0:
+                        mean_reward = -np.inf
+                    else:
+                        mean_reward = round(float(np.mean([np.mean(ep_r[-101:-1]) for ep_r in episode_rewards])), 1)
+
+                    fps = int(step * self.n_envs / (time.time() - start_time))
                     logger.logkv("episodes", num_episodes)
                     logger.logkv("mean 100 episode reward", mean_reward)
                     if len(self.ep_info_buf) > 0 and len(self.ep_info_buf[0]) > 0:
