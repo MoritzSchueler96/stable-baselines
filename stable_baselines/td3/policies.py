@@ -668,19 +668,123 @@ class DRCnnMlpPolicy(FeedForwardPolicy):
 
         return data
 
-        qf1, qf2 = super().make_critics(obs, action, reuse, scope)
 
-        self.extracted = tf.concat([self.extracted, my], axis=-1)
+class DRMyEstPolicy(FeedForwardPolicy):
+    """
+    Policy object that implements actor critic, using a CNN (the nature CNN)
 
-        return qf1, qf2
+    :param sess: (TensorFlow session) The current TensorFlow session
+    :param ob_space: (Gym Space) The observation space of the environment
+    :param ac_space: (Gym Space) The action space of the environment
+    :param n_env: (int) The number of environments to run
+    :param n_steps: (int) The number of steps to run for each environment
+    :param n_batch: (int) The number of batch to run (n_envs * n_steps)
+    :param reuse: (bool) If the policy is reusable or not
+    :param _kwargs: (dict) Extra keyword arguments for the nature CNN feature extraction
+    """
+
+    def __init__(self, sess, ob_space, ac_space, my_size, n_env=1, n_steps=1, n_batch=None, reuse=False, loss_weight=1e-3, **_kwargs):
+        super().__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse,
+                                           cnn_extractor=cnn_1d_extractor, feature_extraction="mlp", **_kwargs)
+
+        self._obs_ph = self.processed_obs  # Base class has self.obs_ph as property getting self._obs_ph
+        with tf.variable_scope("input", reuse=False):
+            self.my_ph = tf.placeholder(tf.float32, (self.n_batch, *my_size), name="my_ph")  # (done t-1)
+            self.action_prev_ph = tf.placeholder(tf.float32, (self.n_batch, *self.ac_space.shape), name="action_prev_ph")
+            self.obs_prev_ph = tf.placeholder(tf.float32, (self.n_batch, *self.ob_space.shape), name="obs_prev_ph")
+
+        self.loss_weight = loss_weight
+        self.obs_prev = np.zeros((1, *self.ob_space.shape))
+        self.action_prev = np.zeros((1, *self.ac_space.shape))
+        self.my_est_loss_op = None
+        self.my_est_op = None
+        self.policy_loss = None
+        self.my_est = None
+        self.extra_phs = ["my", "action_prev", "obs_prev", "target_my", "target_action_prev", "target_obs_prev"]
+        self.extra_data_names = ["my", "action_prev", "obs_prev", "target_my", "target_action_prev", "target_obs_prev"]
+
+    def _process_phs(self, **phs):
+        for ph_name, ph_val in phs.items():
+            if ph_val is None:
+                phs[ph_name] = getattr(self, ph_name + "_ph")
+            else:
+                try:
+                    setattr(self, ph_name + "_ph", ph_val)
+                except AttributeError:
+                    setattr(self, "_" + ph_name + "_ph", ph_val)
+
+        return phs.values()
+
+    def make_actor(self, obs=None, obs_prev=None, action_prev=None, my_gt=None, reuse=False, scope="pi"):
+        obs, obs_prev, action_prev, my_gt = self._process_phs(obs=obs, obs_prev=obs_prev, action_prev=action_prev, my=my_gt)
+
+        if self.obs_module_indices is not None:
+            obs = tf.gather(obs, self.obs_module_indices["pi"], axis=-1)
+            obs_prev = tf.gather(obs_prev, self.obs_module_indices["pi"], axis=-1)
+
+        with tf.variable_scope(scope + "/my", reuse=reuse):
+            my_h = tf.concat([obs, obs_prev, action_prev], axis=-1)
+            my_h = mlp(my_h, [64, 64], self.activ_fn, layer_norm=self.layer_norm)
+            self.my_est_op = tf.layers.dense(my_h, self.my_ph.shape[-1])
+            self.my_est_loss_op = tf.reduce_mean((self.my_est_op - my_gt) ** 2)
+            self.policy_loss = self.loss_weight * self.my_est_loss_op
+
+        obs = tf.concat([obs, self.my_est_op], axis=-1)
+
+        with tf.variable_scope(scope, reuse=reuse):
+            if self.feature_extraction == "cnn":
+                pi_h = self.cnn_extractor(obs, name="pi_c1", act_fun=self.activ_fn, **self.cnn_kwargs)
+            else:
+                pi_h = tf.layers.flatten(obs)
+
+            pi_h = mlp(pi_h, self.layers, self.activ_fn, layer_norm=self.layer_norm)
+
+            self.policy_pre_activation = tf.layers.dense(pi_h, self.ac_space.shape[0])
+            self.policy = policy = tf.tanh(self.policy_pre_activation)
+
+        return policy
+
+    def make_critics(self, obs=None, action=None, my=None, reuse=False, scope="values_fn"):
+        obs, action, my = self._process_phs(obs=obs, action=action, my=my)
+
+        return super().make_critics(obs, action, reuse, scope, extracted_callback=lambda x: tf.concat([x, my], axis=-1))
 
     def collect_data(self, _locals, _globals):
         data = {}
-        if "my" not in _locals or _locals["ep_data"]:
+        if "my" not in _locals or _locals["episode_data"]:
             data["my"] = _locals["self"].env.get_env_parameters()
             data["target_my"] = data["my"]
+        if len(_locals["episode_data"]) == 0:
+            data["obs_prev"] = _locals["obs"]
+            data["action_prev"] = _locals["action"]
+        else:
+            data["obs_prev"] = _locals["episode_data"][-1]["obs"]
+            data["action_prev"] = _locals["episode_data"][-1]["action"]
+        data["target_obs_prev"] = data["obs_prev"]
+        data["target_action_prev"] = data["action_prev"]
 
         return data
+    
+    def step(self, obs, obs_prev=None, action_prev=None, mask=None):
+        if action_prev is None:
+            assert obs.shape[0] == 1
+            if mask is not None and mask[0]:
+                self.action_prev = np.zeros((1, *self.ac_space.shape))
+            action_prev = self.action_prev
+        if obs_prev is None:
+            if mask is not None and mask[0]:
+                self.obs_prev = np.zeros((1, *self.ob_space.shape))
+            obs_prev = self.obs_prev
+
+        action, my_est = self.sess.run([self.policy, self.my_est_op], {self.obs_ph: obs,
+                                             self.action_prev_ph: action_prev,
+                                             self.obs_prev_ph: obs_prev})
+        self.action_prev = action
+        self.obs_prev = obs
+        self.my_est = my_est
+
+        #return action, my_est
+        return action
 
 
 class LnCnnPolicy(FeedForwardPolicy):
@@ -749,3 +853,4 @@ register_policy("MlpPolicy", MlpPolicy)
 register_policy("LnMlpPolicy", LnMlpPolicy)
 register_policy("CnnMlpPolicy", CnnMlpPolicy)
 register_policy("DRCnnMlpPolicy", DRCnnMlpPolicy)
+register_policy("DRMyEstPolicy", DRMyEstPolicy)
