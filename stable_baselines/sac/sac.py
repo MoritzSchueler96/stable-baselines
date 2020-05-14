@@ -319,7 +319,9 @@ class SAC(OffPolicyRLModel):
     def _train_step(self, step, writer, learning_rate):
         # Sample a batch from the replay buffer
         batch = self.replay_buffer.sample(self.batch_size, env=self._vec_normalize_env)
-        batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
+        batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, *batch_extra = batch
+        if len(batch_extra) > 0:
+            batch_extra = batch_extra[0]
 
         feed_dict = {
             self.observations_ph: batch_obs,
