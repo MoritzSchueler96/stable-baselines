@@ -22,12 +22,12 @@ class HERGoalEnvWrapper(object):
 
     def __init__(self, env, norm=False, clip_obs=10):
         super(HERGoalEnvWrapper, self).__init__()
-        self.env = env
-        self.metadata = self.env.metadata
+        self._env = env
+        self.metadata = self._env.metadata
         self.action_space = env.action_space
         self.spaces = [env.observation_space[key] for key in KEY_ORDER]
 
-        self.multi_dimensional_obs = len(env.observation_space.spaces['observation'].shape) > 1
+        self.multi_step_obs = len(env.observation_space.spaces['observation'].shape) > 1
         # Check that all spaces are of the same type
         # (current limitation of the wrapper)
         space_types = [type(env.observation_space.spaces[key]) for key in KEY_ORDER]
@@ -52,7 +52,7 @@ class HERGoalEnvWrapper(object):
             self.observation_space = spaces.MultiBinary(total_dim)
 
         elif isinstance(self.spaces[0], spaces.Box):
-            if self.multi_dimensional_obs:
+            if self.multi_step_obs:
                 lows = np.concatenate([space.low for space in self.spaces], axis=1)
                 highs = np.concatenate([space.high for space in self.spaces], axis=1)
             else:
@@ -71,6 +71,8 @@ class HERGoalEnvWrapper(object):
         self.training = True
         self.orig_obs = None
         self.epsilon = 1e-5
+
+        self.disabled = False
         if norm:
             obs_norm_shape = [self.observation_space.shape[-1]]
             obs_norm_shape[-1] -= self.goal_dim
@@ -89,7 +91,7 @@ class HERGoalEnvWrapper(object):
         if isinstance(self.observation_space, spaces.MultiDiscrete):
             # Special case for multidiscrete
             return np.concatenate([[int(obs_dict[key])] for key in KEY_ORDER])
-        axis = 1 if self.multi_dimensional_obs else 0
+        axis = 1 if self.multi_step_obs else 0
         return np.concatenate([obs_dict[key] for key in KEY_ORDER], axis=axis)
 
     def convert_obs_to_dict(self, observations):
@@ -99,7 +101,7 @@ class HERGoalEnvWrapper(object):
         :param observations: (np.ndarray)
         :return: (OrderedDict<np.ndarray>)
         """
-        if self.multi_dimensional_obs:
+        if self.multi_step_obs:
             return OrderedDict([
                 ('observation', observations[:, :self.obs_dim]),
                 ('achieved_goal', observations[:, self.obs_dim:self.obs_dim + self.goal_dim]),
@@ -113,7 +115,7 @@ class HERGoalEnvWrapper(object):
             ])
 
     def step(self, action):
-        obs, reward, done, info = self.env.step(action)
+        obs, reward, done, info = self._env.step(action)
         obs = self.convert_dict_to_obs(obs)
         if self.norm:
             self.orig_obs = np.copy(obs)
@@ -175,10 +177,10 @@ class HERGoalEnvWrapper(object):
         return self.orig_obs
 
     def seed(self, seed=None):
-        return self.env.seed(seed)
+        return self._env.seed(seed)
 
     def reset(self, *args, **kwargs):
-        obs = self.convert_dict_to_obs(self.env.reset(*args, **kwargs))
+        obs = self.convert_dict_to_obs(self._env.reset(*args, **kwargs))
         if self.norm:
             self.orig_obs = np.copy(obs)
             obs = self.normalize_observation(obs, update=True)
@@ -192,19 +194,22 @@ class HERGoalEnvWrapper(object):
             desired_goal = desired_goal * np.sqrt(self.obs_rms.var[-self.goal_dim:] + self.epsilon) + \
                             self.obs_rms.mean[-self.goal_dim:]
 
-        return self.env.compute_reward(achieved_goal, desired_goal, info)
+        return self._env.compute_reward(achieved_goal, desired_goal, info)
 
     def render(self, mode='human', **kwargs):
-        return self.env.render(mode, **kwargs)
+        return self._env.render(mode, **kwargs)
 
     def get_env_parameters(self, *args, **kwargs):
-        return self.env.get_env_parameters(*args, **kwargs)
+        return self._env.get_env_parameters(*args, **kwargs)
 
     def close(self):
-        return self.env.close()
+        return self._env.close()
 
     def __getattr__(self, item):
-        return getattr(self.env, item)
+        if item in self.__dict__:
+            return getattr(self, item)
+        else:
+            return getattr(self._env, item)
 
     def save_running_average(self, path, suffix=None):
         """
