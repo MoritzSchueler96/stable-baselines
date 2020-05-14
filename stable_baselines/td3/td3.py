@@ -308,7 +308,7 @@ class TD3(OffPolicyRLModel):
                 policy_pre_activation = self.policy_tf.policy_pre_activation
 
                 if self.full_tensorboard_log:
-                    for var in get_vars("model"):
+                    for var in tf_util.get_trainable_vars("model"):
                         tf.summary.histogram(var.name, var)
                 if self.recurrent_policy and self.policy_tf.keras_reuse:
                     tf.summary.histogram("rnn/PI state", self.policy_tf.pi_state)
