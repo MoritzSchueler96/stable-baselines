@@ -90,7 +90,7 @@ class BaseRLModel(ABC):
                     else:
                         raise ValueError("Error: the model requires a non vectorized environment or a single vectorized"
                                          " environment.")
-                self.n_envs = env.num_envs
+                self.n_envs = getattr(env, "num_envs", 1)
 
         # Get VecNormalize object if it exists
         self._vec_normalize_env = unwrap_vec_normalize(self.env)
@@ -146,13 +146,13 @@ class BaseRLModel(ABC):
                 if env.num_envs == 1:
                     env = _UnvecWrapper(env)
                     self._vectorize_action = True
-                else:
-                    raise ValueError("Error: the model requires a non vectorized environment or a single vectorized "
-                                     "environment.")
+                #else:
+                #    raise ValueError("Error: the model requires a non vectorized environment or a single vectorized "
+                #                     "environment.")
             else:
                 self._vectorize_action = False
 
-            self.n_envs = 1
+            self.n_envs = getattr(env, "num_envs", 1)
 
         self.env = env
         self._vec_normalize_env = unwrap_vec_normalize(env)
