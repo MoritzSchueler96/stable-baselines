@@ -140,6 +140,8 @@ class HER(BaseRLModel):
         data['model_class'] = self.model_class
         data['her_obs_space'] = self.observation_space
         data['her_action_space'] = self.action_space
+        if "replay_buffer" in data:
+            data["replay_buffer"].env = None
         super()._save_to_file(save_path, data, params, cloudpickle=cloudpickle)
 
     def save(self, save_path, cloudpickle=False, save_replay_buffer=False):
@@ -163,4 +165,6 @@ class HER(BaseRLModel):
         model.model = data['model_class'].load(load_path, model.get_env(), **kwargs)
         model.model.replay_buffer.episode_transitions = []
         model.model._save_to_file = model._save_to_file
+        if env is not None:
+            model.model.replay_buffer.env = env
         return model
