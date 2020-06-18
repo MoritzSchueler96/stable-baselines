@@ -78,7 +78,10 @@ class HindsightExperienceReplayWrapper(object):
         self.use_her = False
         self.require_change = True
         self.reward_transformation = None
-        self.multi_step_obs = getattr(self.env, "multi_step_obs", self.env.get_attr("multi_step_obs"))
+        if hasattr(self.env, "get_attr"):
+            self.multi_step_obs = self.env.get_attr("multi_step_obs")
+        else:
+            self.multi_step_obs = getattr(self.env, "multi_step_obs", False)
 
         if "Recurrent" in replay_buffer.__name__:
             self.recurrent = True
