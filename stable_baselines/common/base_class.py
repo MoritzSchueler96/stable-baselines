@@ -127,9 +127,9 @@ class BaseRLModel(ABC):
             raise ValueError("Error: trying to replace the current environment with None")
 
         # sanity checking the environment
-        assert self.observation_space == env.observation_space, \
+        #assert self.observation_space == env.observation_space, \
             "Error: the environment passed must have at least the same observation space as the model was trained on."
-        assert self.action_space == env.action_space, \
+        #assert self.action_space == env.action_space, \
             "Error: the environment passed must have at least the same action space as the model was trained on."
         if self._requires_vec_env:
             assert isinstance(env, VecEnv), \
@@ -1098,7 +1098,7 @@ class OffPolicyRLModel(BaseRLModel):
         model = cls(policy=data["policy"], env=None, _init_setup_model=False)
         model.__dict__.update(data)
         model.__dict__.update(kwargs)
-        model.set_env(env)
+        model.set_env(env) #TODO: fix for MP
         model.setup_model()
 
         model.load_parameters(params)
