@@ -887,3 +887,9 @@ class TD3(OffPolicyRLModel):
         params_to_save = self.get_parameters()
 
         self._save_to_file(save_path, data=data, params=params_to_save, cloudpickle=cloudpickle)
+
+    def export(self, export_path):
+        with self.graph.as_default():
+            tf.saved_model.simple_save(self.sess, export_path, inputs={"obs": self.policy_tf.obs_ph},
+                                       outputs={"action": self.policy_tf.policy})
+            print("Exported model to {}".format(export_path))
