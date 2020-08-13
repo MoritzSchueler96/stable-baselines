@@ -203,7 +203,9 @@ class DDPG(OffPolicyRLModel):
                  return_range=(-np.inf, np.inf), actor_lr=1e-4, critic_lr=1e-3, clip_norm=None, reward_scale=1.,
                  render=False, render_eval=False, memory_limit=None, buffer_size=50000, random_exploration=0.0,
                  verbose=0, tensorboard_log=None, _init_setup_model=True, policy_kwargs=None,
-                 full_tensorboard_log=False, seed=None, n_cpu_tf_sess=1):
+                 full_tensorboard_log=False, seed=None, n_cpu_tf_sess=1,
+                 use_cpprb=False, buffer_type=ReplayBuffer, buffer_kwargs=None, beta_schedule=None, buffer_prio_metric=None,
+                 ensemble_q=None):
 
         super(DDPG, self).__init__(policy=policy, env=env, replay_buffer=None,
                                    verbose=verbose, policy_base=DDPGPolicy,
@@ -223,6 +225,13 @@ class DDPG(OffPolicyRLModel):
             warnings.warn("memory_limit will be removed in a future version (v3.x.x) "
                           "use buffer_size instead", DeprecationWarning)
             buffer_size = memory_limit
+
+        self.use_cpprb = use_cpprb
+        self.buffer_type = buffer_type
+        self.buffer_kwargs = buffer_kwargs if buffer_kwargs is not None else {}
+        self.buffer_is_prioritized = False
+        self.buffer_prio_metric = buffer_prio_metric
+        self.beta_schedule = beta_schedule
 
         self.normalize_observations = normalize_observations
         self.normalize_returns = normalize_returns
@@ -300,6 +309,9 @@ class DDPG(OffPolicyRLModel):
         self.params = None
         self.summary = None
         self.tb_seen_steps = None
+        self.is_weights_ph = None
+        self.td_error = None
+
 
         self.target_params = None
         self.obs_rms_params = None
@@ -327,7 +339,11 @@ class DDPG(OffPolicyRLModel):
                 self.set_random_seed(self.seed)
                 self.sess = tf_util.make_session(num_cpu=self.n_cpu_tf_sess, graph=self.graph)
 
-                self.replay_buffer = ReplayBuffer(self.buffer_size)
+                self.buffer_is_prioritized = self.buffer_type.__name__ in ["PrioritizedReplayBuffer",
+                                                                           "RankPrioritizedReplayBuffer",
+                                                                           "CPPRBWrapper"]
+                assert not self.buffer_is_prioritized or self.buffer_prio_metric is not None
+                self.replay_buffer = self.buffer_type(self.buffer_size, **self.buffer_kwargs)
 
                 with tf.variable_scope("input", reuse=False):
                     # Observation normalization.
@@ -380,6 +396,8 @@ class DDPG(OffPolicyRLModel):
                     self.actions = tf.placeholder(tf.float32, shape=(None,) + self.action_space.shape, name='actions')
                     self.critic_target = tf.placeholder(tf.float32, shape=(None, 1), name='critic_target')
                     self.param_noise_stddev = tf.placeholder(tf.float32, shape=(), name='param_noise_stddev')
+                    if self.buffer_is_prioritized:
+                        self.is_weights_ph = tf.placeholder(tf.float32, shape=(None, 1), name="is_weights")
 
                 # Create networks and core TF parts that are shared across setup parts.
                 with tf.variable_scope("model", reuse=False):
@@ -512,7 +530,10 @@ class DDPG(OffPolicyRLModel):
         normalized_critic_target_tf = tf.clip_by_value(normalize(self.critic_target, self.ret_rms),
                                                        self.return_range[0], self.return_range[1])
         self.normalized_critic_target_tf = normalized_critic_target_tf
-        self.critic_loss = tf.reduce_mean(tf.square(self.normalized_critic_tf - normalized_critic_target_tf))
+        self.td_error = tf.square(self.normalized_critic_tf - normalized_critic_target_tf)
+        if self.buffer_is_prioritized:
+            self.td_error = self.td_error * self.is_weights_ph
+        self.critic_loss = tf.reduce_mean(self.td_error)
         if self.critic_l2_reg > 0.:
             critic_reg_vars = [var for var in tf_util.get_trainable_vars('model/qf/')
                                if 'bias' not in var.name and 'qf_output' not in var.name and 'b' not in var.name]
@@ -651,8 +672,21 @@ class DDPG(OffPolicyRLModel):
         :return: (float, float) critic loss, actor loss
         """
         # Get a batch
-        obs, actions, rewards, next_obs, terminals = self.replay_buffer.sample(batch_size=self.batch_size,
-                                                                               env=self._vec_normalize_env)
+        if self.buffer_is_prioritized:
+            sample_kw = {"batch_size": self.batch_size, "beta": self.beta_schedule(self.num_timesteps)}
+            if self.use_cpprb:
+                data = self.replay_buffer.sample(**sample_kw)
+                obs, actions, rewards, next_obs, terminals = data["obs"], data["act"], data["rew"], data["next_obs"], data["done"]
+                is_weights = data["weights"]
+                idxs = data["indexes"]
+            else:
+                sample_kw["env"] = self._vec_normalize_env
+                obs, actions, rewards, next_obs, terminals, prio_data = self.replay_buffer.sample(**sample_kw)
+                is_weights = prio_data["is_weights"]
+                idxs = prio_data["idxs"]
+        else:
+            obs, actions, rewards, next_obs, terminals = self.replay_buffer.sample(batch_size=self.batch_size,
+                                                                                   env=self._vec_normalize_env)
         # Reshape to match previous behavior and placeholder shape
         rewards = rewards.reshape(-1, 1)
         terminals = terminals.reshape(-1, 1)
@@ -687,23 +721,41 @@ class DDPG(OffPolicyRLModel):
             self.critic_target: target_q,
             self.param_noise_stddev: 0 if self.param_noise is None else self.param_noise.current_stddev
         }
+        if self.buffer_is_prioritized:
+            td_map[self.is_weights_ph] = is_weights.reshape(-1, 1)
+            if self.buffer_prio_metric == "TD":
+                ops.append(self.td_error[0])
+            elif self.buffer_prio_metric == "VD":
+                #ops.append(tf.math.reduce_std(self.normalized_critic_tf, axis=0))
+                ops.append(self.normalized_critic_tf)
+            else:
+                raise ValueError("Invalid buffer_prio_metric {}".format(self.buffer_prio_metric))
         if writer is not None:
             # run loss backprop with summary if the step_id was not already logged (can happen with the right
             # parameters as the step value is only an estimate)
             if self.full_tensorboard_log and log and step not in self.tb_seen_steps:
                 run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
                 run_metadata = tf.RunMetadata()
-                summary, actor_grads, actor_loss, critic_grads, critic_loss = \
-                    self.sess.run([self.summary] + ops, td_map, options=run_options, run_metadata=run_metadata)
+                run_res = self.sess.run([self.summary] + ops, td_map, options=run_options, run_metadata=run_metadata)
 
                 writer.add_run_metadata(run_metadata, 'step%d' % step)
                 self.tb_seen_steps.append(step)
             else:
-                summary, actor_grads, actor_loss, critic_grads, critic_loss = self.sess.run([self.summary] + ops,
-                                                                                            td_map)
+                run_res = self.sess.run([self.summary] + ops, td_map)
+            if self.buffer_is_prioritized:
+                buffer_prios = run_res.pop()
+            summary, actor_grads, actor_loss, critic_grads, critic_loss = run_res
             writer.add_summary(summary, step)
         else:
-            actor_grads, actor_loss, critic_grads, critic_loss = self.sess.run(ops, td_map)
+            run_res = self.sess.run(ops, td_map)
+            if self.buffer_is_prioritized:
+                buffer_prios = run_res.pop()
+            actor_grads, actor_loss, critic_grads, critic_loss = run_res
+
+        if self.buffer_is_prioritized:
+            if self.buffer_prio_metric == "VD":
+                buffer_prios = np.std(buffer_prios, axis=0)
+            self.replay_buffer.update_priorities(idxs, buffer_prios.reshape(-1))
 
         self.actor_optimizer.update(actor_grads, learning_rate=self.actor_lr)
         self.critic_optimizer.update(critic_grads, learning_rate=self.critic_lr)
@@ -737,8 +789,19 @@ class DDPG(OffPolicyRLModel):
         if self.stats_sample is None:
             # Get a sample and keep that fixed for all further computations.
             # This allows us to estimate the change in value for the same set of inputs.
-            obs, actions, rewards, next_obs, terminals = self.replay_buffer.sample(batch_size=self.batch_size,
-                                                                                   env=self._vec_normalize_env)
+            if self.buffer_is_prioritized:
+                if self.buffer_is_prioritized:
+                    sample_kw = {"batch_size": self.batch_size, "beta": self.beta_schedule(self.num_timesteps)}
+                    if self.use_cpprb:
+                        data = self.replay_buffer.sample(**sample_kw)
+                        obs, actions, rewards, next_obs, terminals = data["obs"], data["act"], data["rew"], data[
+                            "next_obs"], data["done"]
+                    else:
+                        sample_kw["env"] = self._vec_normalize_env
+                        obs, actions, rewards, next_obs, terminals, prio_data = self.replay_buffer.sample(**sample_kw)
+            else:
+                obs, actions, rewards, next_obs, terminals = self.replay_buffer.sample(batch_size=self.batch_size,
+                                                                                       env=self._vec_normalize_env)
             self.stats_sample = {
                 'obs': obs,
                 'actions': actions,
@@ -961,6 +1024,9 @@ class DDPG(OffPolicyRLModel):
                                 self._reset()
                                 if not isinstance(self.env, VecEnv):
                                     obs = self.env.reset()
+
+                                if self.use_cpprb and self.buffer_is_prioritized:
+                                    self.replay_buffer.on_episode_end()
 
                         callback.on_rollout_end()
                         # Train.
