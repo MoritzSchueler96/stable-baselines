@@ -1244,7 +1244,7 @@ class DDPG(OffPolicyRLModel):
                 self.obs_rms_params +
                 self.ret_rms_params)
 
-    def save(self, save_path, cloudpickle=False):
+    def save(self, save_path, cloudpickle=False, save_replay_buffer=False):
         data = {
             "observation_space": self.observation_space,
             "action_space": self.action_space,
@@ -1278,6 +1278,9 @@ class DDPG(OffPolicyRLModel):
             "_vectorize_action": self._vectorize_action,
             "policy_kwargs": self.policy_kwargs
         }
+
+        if save_replay_buffer:
+            data["replay_buffer"] = self.replay_buffer
 
         params_to_save = self.get_parameters()
 
