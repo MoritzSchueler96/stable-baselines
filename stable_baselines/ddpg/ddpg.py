@@ -567,7 +567,7 @@ class DDPG(OffPolicyRLModel):
             self.td_error = []
             self.critic_loss = []
             for q_i in range(self.ensemble_q):
-                normalized_critic_target_tf = tf.clip_by_value(normalize(self.critic_target, self.ret_rms),
+                normalized_critic_target_tf = tf.clip_by_value(normalize(self.critic_target[q_i], self.ret_rms),
                                                                self.return_range[0], self.return_range[1])
                 self.normalized_critic_target_tf.append(normalized_critic_target_tf)
                 self.td_error.append(tf.square(self.normalized_critic_tf[q_i] - normalized_critic_target_tf))
