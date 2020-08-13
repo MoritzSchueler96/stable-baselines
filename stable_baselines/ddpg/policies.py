@@ -181,6 +181,51 @@ class FeedForwardPolicy(DDPGPolicy):
         return self.sess.run(self._qvalue, {self.obs_ph: obs, self.action_ph: action})
 
 
+class EnsembleQPolicy(FeedForwardPolicy):
+    def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, n_q, reuse=False, **_kwargs):
+        self.n_q = n_q
+        super(EnsembleQPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse,
+                                            feature_extraction="mlp", **_kwargs)
+        self.qvalue_fn = []
+        self._qvalue = []
+
+    def make_critic(self, obs=None, action=None, reuse=False, scope="qf"):
+        if obs is None:
+            obs = self.processed_obs
+        if action is None:
+            action = self.action_ph
+
+        self.qvalue_fn = []
+        self._qvalue = []
+
+        for q_i in range(self.n_q):
+            with tf.variable_scope(scope + "/q{}".format(q_i), reuse=reuse):
+                if self.feature_extraction == "cnn":
+                    qf_h = self.cnn_extractor(obs, **self.cnn_kwargs)
+                else:
+                    qf_h = tf.layers.flatten(obs)
+                for i, layer_size in enumerate(self.layers):
+                    qf_h = tf.layers.dense(qf_h, layer_size, name='fc' + str(i))
+                    if self.layer_norm:
+                        qf_h = tf.contrib.layers.layer_norm(qf_h, center=True, scale=True)
+                    qf_h = self.activ(qf_h)
+                    if i == 0:
+                        qf_h = tf.concat([qf_h, action], axis=-1)
+
+                # the name attribute is used in pop-art normalization
+                qvalue_fn = tf.layers.dense(qf_h, 1, name='qf_output',
+                                            kernel_initializer=tf.random_uniform_initializer(minval=-3e-3,
+                                                                                             maxval=3e-3))
+
+                self.qvalue_fn.append(qvalue_fn)
+                self._qvalue.append(qvalue_fn[:, 0])
+
+        return self.qvalue_fn
+
+    def value(self, obs, action, state=None, mask=None):
+        return self.sess.run(self._qvalue[0], {self.obs_ph: obs, self.action_ph: action})
+
+
 class CnnPolicy(FeedForwardPolicy):
     """
     Policy object that implements actor critic, using a CNN (the nature CNN)

@@ -233,6 +233,11 @@ class DDPG(OffPolicyRLModel):
         self.buffer_prio_metric = buffer_prio_metric
         self.beta_schedule = beta_schedule
 
+        assert ensemble_q is None or ensemble_q > 1
+        self.ensemble_q = ensemble_q
+        if self.ensemble_q is not None:
+            self.policy_kwargs.update({"n_q": self.ensemble_q})
+
         self.normalize_observations = normalize_observations
         self.normalize_returns = normalize_returns
         self.action_noise = action_noise
@@ -394,7 +399,11 @@ class DDPG(OffPolicyRLModel):
                     self.terminals_ph = tf.placeholder(tf.float32, shape=(None, 1), name='terminals')
                     self.rewards = tf.placeholder(tf.float32, shape=(None, 1), name='rewards')
                     self.actions = tf.placeholder(tf.float32, shape=(None,) + self.action_space.shape, name='actions')
-                    self.critic_target = tf.placeholder(tf.float32, shape=(None, 1), name='critic_target')
+
+                    if self.ensemble_q is not None:
+                        self.critic_target = [tf.placeholder(tf.float32, shape=(None, 1), name='critic_target_q{}'.format(q_i)) for q_i in range(self.ensemble_q)]
+                    else:
+                        self.critic_target = tf.placeholder(tf.float32, shape=(None, 1), name='critic_target')
                     self.param_noise_stddev = tf.placeholder(tf.float32, shape=(), name='param_noise_stddev')
                     if self.buffer_is_prioritized:
                         self.is_weights_ph = tf.placeholder(tf.float32, shape=(None, 1), name="is_weights")
@@ -415,17 +424,36 @@ class DDPG(OffPolicyRLModel):
                                                                    self.target_policy.make_actor(normalized_next_obs))
 
                 with tf.variable_scope("loss", reuse=False):
-                    self.critic_tf = denormalize(
-                        tf.clip_by_value(self.normalized_critic_tf, self.return_range[0], self.return_range[1]),
-                        self.ret_rms)
+                    if self.ensemble_q is not None:
+                        self.critic_tf = []
+                        self.critic_with_actor_tf = []
+                        for q_i in range(self.ensemble_q):
+                            self.critic_tf.append(denormalize(
+                                tf.clip_by_value(self.normalized_critic_tf[q_i], self.return_range[0], self.return_range[1]),
+                                self.ret_rms))
 
-                    self.critic_with_actor_tf = denormalize(
-                        tf.clip_by_value(self.normalized_critic_with_actor_tf,
-                                         self.return_range[0], self.return_range[1]),
-                        self.ret_rms)
+                            self.critic_with_actor_tf.append(denormalize(
+                                tf.clip_by_value(self.normalized_critic_with_actor_tf[q_i],
+                                                 self.return_range[0], self.return_range[1]),
+                                self.ret_rms))
+                    else:
+                        self.critic_tf = denormalize(
+                            tf.clip_by_value(self.normalized_critic_tf, self.return_range[0], self.return_range[1]),
+                            self.ret_rms)
 
-                    q_next_obs = denormalize(critic_target, self.ret_rms)
-                    self.target_q = self.rewards + (1. - self.terminals_ph) * self.gamma * q_next_obs
+                        self.critic_with_actor_tf = denormalize(
+                            tf.clip_by_value(self.normalized_critic_with_actor_tf,
+                                             self.return_range[0], self.return_range[1]),
+                            self.ret_rms)
+
+                    if self.ensemble_q is not None:
+                        self.target_q = []
+                        for q_i in range(self.ensemble_q):
+                            q_next_obs = denormalize(critic_target[q_i], self.ret_rms)
+                            self.target_q.append(self.rewards + (1. - self.terminals_ph) * self.gamma * q_next_obs)
+                    else:
+                        q_next_obs = denormalize(critic_target, self.ret_rms)
+                        self.target_q = self.rewards + (1. - self.terminals_ph) * self.gamma * q_next_obs
 
                     tf.summary.scalar('critic_target', tf.reduce_mean(self.critic_target))
                     if self.full_tensorboard_log:
@@ -453,7 +481,11 @@ class DDPG(OffPolicyRLModel):
                     self._setup_actor_optimizer()
                     self._setup_critic_optimizer()
                     tf.summary.scalar('actor_loss', self.actor_loss)
-                    tf.summary.scalar('critic_loss', self.critic_loss)
+                    if self.ensemble_q is not None:
+                        for q_i in range(self.ensemble_q):
+                            tf.summary.scalar('q{}_critic_loss'.format(q_i), self.critic_loss[q_i])
+                    else:
+                        tf.summary.scalar('critic_loss', self.critic_loss)
 
                 self.params = tf_util.get_trainable_vars("model") \
                     + tf_util.get_trainable_vars('noise/') + tf_util.get_trainable_vars('noise_adapt/')
@@ -510,7 +542,10 @@ class DDPG(OffPolicyRLModel):
         """
         if self.verbose >= 2:
             logger.info('setting up actor optimizer')
-        self.actor_loss = -tf.reduce_mean(self.critic_with_actor_tf)
+        if self.ensemble_q is not None:
+            self.actor_loss = -tf.reduce_mean(self.critic_with_actor_tf[0])
+        else:
+            self.actor_loss = -tf.reduce_mean(self.critic_with_actor_tf)
         actor_shapes = [var.get_shape().as_list() for var in tf_util.get_trainable_vars('model/pi/')]
         actor_nb_params = sum([reduce(lambda x, y: x * y, shape) for shape in actor_shapes])
         if self.verbose >= 2:
@@ -527,14 +562,28 @@ class DDPG(OffPolicyRLModel):
         """
         if self.verbose >= 2:
             logger.info('setting up critic optimizer')
-        normalized_critic_target_tf = tf.clip_by_value(normalize(self.critic_target, self.ret_rms),
-                                                       self.return_range[0], self.return_range[1])
-        self.normalized_critic_target_tf = normalized_critic_target_tf
-        self.td_error = tf.square(self.normalized_critic_tf - normalized_critic_target_tf)
-        if self.buffer_is_prioritized:
-            self.td_error = self.td_error * self.is_weights_ph
-        self.critic_loss = tf.reduce_mean(self.td_error)
+        if self.ensemble_q is not None:
+            self.normalized_critic_target_tf = []
+            self.td_error = []
+            self.critic_loss = []
+            for q_i in range(self.ensemble_q):
+                normalized_critic_target_tf = tf.clip_by_value(normalize(self.critic_target, self.ret_rms),
+                                                               self.return_range[0], self.return_range[1])
+                self.normalized_critic_target_tf.append(normalized_critic_target_tf)
+                self.td_error.append(tf.square(self.normalized_critic_tf[q_i] - normalized_critic_target_tf))
+                if self.buffer_is_prioritized:
+                    self.td_error[q_i] = self.td_error[q_i] * self.is_weights_ph
+                self.critic_loss.append(tf.reduce_mean(self.td_error[q_i]))
+        else:
+            normalized_critic_target_tf = tf.clip_by_value(normalize(self.critic_target, self.ret_rms),
+                                                           self.return_range[0], self.return_range[1])
+            self.normalized_critic_target_tf = normalized_critic_target_tf
+            self.td_error = tf.square(self.normalized_critic_tf - normalized_critic_target_tf)
+            if self.buffer_is_prioritized:
+                self.td_error = self.td_error * self.is_weights_ph
+            self.critic_loss = tf.reduce_mean(self.td_error)
         if self.critic_l2_reg > 0.:
+            assert self.ensemble_q is None
             critic_reg_vars = [var for var in tf_util.get_trainable_vars('model/qf/')
                                if 'bias' not in var.name and 'qf_output' not in var.name and 'b' not in var.name]
             if self.verbose >= 2:
@@ -551,8 +600,14 @@ class DDPG(OffPolicyRLModel):
         if self.verbose >= 2:
             logger.info('  critic shapes: {}'.format(critic_shapes))
             logger.info('  critic params: {}'.format(critic_nb_params))
-        self.critic_grads = tf_util.flatgrad(self.critic_loss, tf_util.get_trainable_vars('model/qf/'),
-                                             clip_norm=self.clip_norm)
+        if self.ensemble_q is not None and False:
+            self.critic_grads = []
+            for q_i in range(self.ensemble_q):
+                self.critic_grads.append(tf_util.flatgrad(self.critic_loss[q_i], tf_util.get_trainable_vars('model/qf/q{}'.format(q_i)),
+                                                     clip_norm=self.clip_norm))
+        else:
+            self.critic_grads = tf_util.flatgrad(self.critic_loss, tf_util.get_trainable_vars('model/qf/'),
+                                                 clip_norm=self.clip_norm)
         self.critic_optimizer = MpiAdam(var_list=tf_util.get_trainable_vars('model/qf/'), beta1=0.9, beta2=0.999,
                                         epsilon=1e-08)
 
@@ -635,7 +690,10 @@ class DDPG(OffPolicyRLModel):
             actor_tf = self.actor_tf
 
         if compute_q:
-            action, q_value = self.sess.run([actor_tf, self.critic_with_actor_tf], feed_dict=feed_dict)
+            if self.ensemble_q is not None:
+                action, q_value = self.sess.run([actor_tf, self.critic_with_actor_tf[0]], feed_dict=feed_dict)
+            else:
+                action, q_value = self.sess.run([actor_tf, self.critic_with_actor_tf], feed_dict=feed_dict)
         else:
             action = self.sess.run(actor_tf, feed_dict=feed_dict)
             q_value = None
@@ -712,15 +770,21 @@ class DDPG(OffPolicyRLModel):
             })
 
         # Get all gradients and perform a synced update.
-        ops = [self.actor_grads, self.actor_loss, self.critic_grads, self.critic_loss]
+        ops = [self.actor_grads, self.actor_loss, self.critic_grads]
         td_map = {
             self.obs_train: obs,
             self.actions: actions,
             self.action_train_ph: actions,
             self.rewards: rewards,
-            self.critic_target: target_q,
             self.param_noise_stddev: 0 if self.param_noise is None else self.param_noise.current_stddev
         }
+        if self.ensemble_q is not None:
+            for q_i in range(self.ensemble_q):
+                td_map[self.critic_target[q_i]] = target_q[q_i]
+            ops.extend(self.critic_loss)
+        else:
+            td_map[self.critic_target] = target_q
+            ops.append(self.critic_loss)
         if self.buffer_is_prioritized:
             td_map[self.is_weights_ph] = is_weights.reshape(-1, 1)
             if self.buffer_prio_metric == "TD":
@@ -744,7 +808,9 @@ class DDPG(OffPolicyRLModel):
                 run_res = self.sess.run([self.summary] + ops, td_map)
             if self.buffer_is_prioritized:
                 buffer_prios = run_res.pop()
-            summary, actor_grads, actor_loss, critic_grads, critic_loss = run_res
+            summary, actor_grads, actor_loss, critic_grads, *critic_loss = run_res
+            if self.ensemble_q is None:
+                critic_loss = critic_loss[0]
             writer.add_summary(summary, step)
         else:
             run_res = self.sess.run(ops, td_map)
