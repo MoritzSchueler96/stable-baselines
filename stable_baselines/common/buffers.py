@@ -130,11 +130,17 @@ class ReplayBuffer(object):
                 else:
                     extra_data[extra_data_name].append(np.array(data, copy=False))
 
-        extra_data = {k: np.array(v) for k, v in extra_data.items()}
+        if len(self._extra_data_names) > 0:
+            extra_data = {k: np.array(v) for k, v in extra_data.items()}
 
-        return self._normalize_obs(np.array(obses_t), env), np.array(actions), \
-               self._normalize_reward(np.array(rewards), env), self._normalize_obs(np.array(obses_tp1), env), \
-                np.array(dones), extra_data
+            return self._normalize_obs(np.array(obses_t), env), np.array(actions), \
+                   self._normalize_reward(np.array(rewards), env), self._normalize_obs(np.array(obses_tp1), env), \
+                    np.array(dones), extra_data
+
+        else:
+            return self._normalize_obs(np.array(obses_t), env), np.array(actions), \
+                   self._normalize_reward(np.array(rewards), env), self._normalize_obs(np.array(obses_tp1), env), \
+                   np.array(dones)
 
     def sample(self, batch_size: int, env: Optional[VecNormalize] = None, **_kwargs):
         """
@@ -564,7 +570,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         p_sample = self._it_sum[idxes] / self._it_sum.sum()
         weights = (p_sample * len(self._storage)) ** (-beta) / max_weight
         encoded_sample = self._encode_sample(idxes, env=env)
-        return tuple(list(encoded_sample) + {"is_weights": weights, "idxs": idxes})
+        return tuple(list(encoded_sample) + [{"is_weights": weights, "idxs": idxes}])
 
     def update_priorities(self, idxes, priorities):
         """
