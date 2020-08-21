@@ -196,7 +196,7 @@ class DDPG(OffPolicyRLModel):
     :param n_cpu_tf_sess: (int) The number of threads for TensorFlow operations
         If None, the number of cpu of the current machine will be used.
     """
-    def __init__(self, policy, env, gamma=0.99, memory_policy=None, eval_env=None, nb_train_steps=50,
+    def __init__(self, policy, env, gamma=0.99, memory_policy=None, eval_env=None, write_freq=1, nb_train_steps=50,
                  nb_rollout_steps=100, nb_eval_steps=100, param_noise=None, action_noise=None,
                  normalize_observations=False, tau=0.001, batch_size=128, param_noise_adaption_interval=50,
                  normalize_returns=False, enable_popart=False, observation_range=(-5., 5.), critic_l2_reg=0.,
@@ -207,7 +207,7 @@ class DDPG(OffPolicyRLModel):
                  use_cpprb=False, buffer_type=ReplayBuffer, buffer_kwargs=None, beta_schedule=None, buffer_prio_metric=None,
                  ensemble_q=None):
 
-        super(DDPG, self).__init__(policy=policy, env=env, replay_buffer=None,
+        super(DDPG, self).__init__(policy=policy, env=env, replay_buffer=None, write_freq=write_freq,
                                    verbose=verbose, policy_base=DDPGPolicy,
                                    requires_vec_env=False, policy_kwargs=policy_kwargs,
                                    seed=seed, n_cpu_tf_sess=n_cpu_tf_sess)
@@ -731,7 +731,7 @@ class DDPG(OffPolicyRLModel):
         """
         # Get a batch
         if self.buffer_is_prioritized:
-            sample_kw = {"batch_size": self.batch_size, "beta": self.beta_schedule(self.num_timesteps)}
+            sample_kw = {"batch_size": self.batch_size, "beta": self.beta_schedule(step)}
             if self.use_cpprb:
                 data = self.replay_buffer.sample(**sample_kw)
                 obs, actions, rewards, next_obs, terminals = data["obs"], data["act"], data["rew"], data["next_obs"], data["done"]
@@ -809,9 +809,8 @@ class DDPG(OffPolicyRLModel):
             if self.buffer_is_prioritized:
                 buffer_prios = run_res.pop()
             summary, actor_grads, actor_loss, critic_grads, *critic_loss = run_res
-            if self.ensemble_q is None:
-                critic_loss = critic_loss[0]
-            writer.add_summary(summary, step)
+            if step % self.write_freq == 0:
+                writer.add_summary(summary, step)
         else:
             run_res = self.sess.run(ops, td_map)
             if self.buffer_is_prioritized:
