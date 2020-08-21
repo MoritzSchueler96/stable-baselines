@@ -817,6 +817,9 @@ class DDPG(OffPolicyRLModel):
                 buffer_prios = run_res.pop()
             actor_grads, actor_loss, critic_grads, critic_loss = run_res
 
+        if self.ensemble_q is None:
+            critic_loss = critic_loss[0]
+
         if self.buffer_is_prioritized:
             if self.buffer_prio_metric == "VD":
                 buffer_prios = np.std(buffer_prios, axis=0)
