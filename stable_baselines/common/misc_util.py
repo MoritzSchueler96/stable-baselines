@@ -23,11 +23,12 @@ def set_global_seeds(seed):
 
     :param seed: (int) the seed
     """
-    tf.set_random_seed(seed)
+    # tf.set_random_seed(seed)
+    tf.compat.v1.set_random_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
     # prng was removed in latest gym version
-    if hasattr(gym.spaces, 'prng'):
+    if hasattr(gym.spaces, "prng"):
         gym.spaces.prng.seed(seed)
 
 
@@ -40,8 +41,10 @@ def boolean_flag(parser, name, default=False, help_msg=None):
     :param default: (bool) default value of the flag
     :param help_msg: (str) help string for the flag
     """
-    dest = name.replace('-', '_')
-    parser.add_argument("--" + name, action="store_true", default=default, dest=dest, help=help_msg)
+    dest = name.replace("-", "_")
+    parser.add_argument(
+        "--" + name, action="store_true", default=default, dest=dest, help=help_msg
+    )
     parser.add_argument("--no-" + name, action="store_false", dest=dest)
 
 
@@ -52,6 +55,7 @@ def mpi_rank_or_zero():
     """
     try:
         import mpi4py
+
         return mpi4py.MPI.COMM_WORLD.Get_rank()
     except ImportError:
         return 0
